@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes shellcheck
-          shellcheck -s sh install.sh
+          shellcheck -s sh install.sh uninstall.sh
 
       - name: Run tests
         run: go test -race ./...
