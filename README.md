@@ -23,8 +23,9 @@ The daemon and Discord must run in the same desktop user session. The supplied
 service is a systemd user service and does not require root access.
 
 No Discord Developer Portal registration or Last.fm API key is required. The
-daemon uses the official Cliamp Discord application by default and displays its
-static artwork. Album artwork through Last.fm is an optional enhancement.
+daemon uses the community-maintained Cliamp Discord application by default and
+displays its static artwork. Album artwork through Last.fm is an optional
+enhancement.
 
 ## Install from release
 
@@ -178,12 +179,13 @@ lastfm_api_key = "YOUR_LASTFM_API_KEY"
 ```
 
 Only the API key is needed. Do not add the Last.fm shared secret. When the key
-is absent or empty, artwork lookup is disabled and the official static Discord
-asset is used.
+is absent or empty, artwork lookup is disabled and the community-maintained
+static Discord asset is used.
 
 ### Use a custom Discord application
 
-To replace the official Discord application, create an application in the
+To replace the community-maintained default Discord application, create an
+application in the
 [Discord Developer Portal](https://discord.com/developers/applications), copy
 its Application ID, and upload a square Rich Presence art asset named `cliamp`.
 Then configure the override:

@@ -69,9 +69,9 @@ separate while retaining Go's `internal` import protection: code beneath
 
 - `daemon/cmd/cliamp-rpcd` handles process startup and operating-system signals.
 - `daemon/internal/config` loads flags, environment overrides, and
-  `[plugins.discord-rpc]` from Cliamp's TOML config. The official Discord
-  Application ID is the final fallback, while Last.fm artwork is disabled when
-  no API key is configured.
+  `[plugins.discord-rpc]` from Cliamp's TOML config. The community-maintained
+  Discord application ID is the final fallback, while Last.fm artwork is
+  disabled when no API key is configured.
 - `daemon/internal/playback` validates state documents and defines visibility rules.
 - `daemon/internal/presence` builds typed Discord Listening activity payloads.
 - `daemon/internal/artwork` resolves and caches album images from Last.fm.
@@ -97,8 +97,8 @@ largest valid HTTPS image, and caches both hits and misses for its lifetime. A
 missing API key, failed lookup, or absent image falls back to the Discord
 application asset configured by `-large-image`.
 
-The daemon uses the official Discord application ID by default. A custom ID can
-be supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
+The community-maintained default Discord application ID is used unless a custom
+ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
 `plugins.discord-rpc.app_id`. Last.fm artwork is enabled only when a
 `lastfm_api_key` is supplied; otherwise the static application asset is used.
 
