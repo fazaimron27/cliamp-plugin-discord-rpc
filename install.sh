@@ -2,7 +2,7 @@
 set -eu
 
 repository="fazaimron27/cliamp-plugin-discord-rpc"
-version="${CLIAMP_RPC_VERSION:-v1.1.0}"
+version="${CLIAMP_RPC_VERSION:-v1.1.1}"
 bin_dir="${CLIAMP_RPC_BIN_DIR:-${HOME:?HOME is not set}/.local/bin}"
 service_dir="${CLIAMP_RPC_SERVICE_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user}"
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -15,7 +15,7 @@ Usage: install.sh [options]
 Install the Cliamp Discord RPC daemon and systemd user service.
 
 Options:
-  --version VERSION       Release version to install (default: v1.1.0)
+  --version VERSION       Release version to install (default: v1.1.1)
   --bin-dir DIRECTORY     Daemon installation directory (default: ~/.local/bin)
   --service-dir DIRECTORY systemd user unit directory
   -h, --help              Show this help
@@ -92,7 +92,7 @@ for component do
 done
 
 if [ ! -f "$source_dir/cliamp-rpcd" ] || [ ! -f "$source_dir/cliamp-rpcd.service" ]; then
-  for command in awk curl sha256sum tar uname mktemp; do
+  for command in awk curl gh sha256sum tar uname mktemp; do
     command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"
   done
 
@@ -110,6 +110,12 @@ if [ ! -f "$source_dir/cliamp-rpcd" ] || [ ! -f "$source_dir/cliamp-rpcd.service
   printf 'Downloading %s...\n' "$archive"
   curl -fL --retry 3 -o "$tmp_dir/$archive" "$base_url/$archive"
   curl -fL --retry 3 -o "$tmp_dir/checksums.txt" "$base_url/checksums.txt"
+  gh attestation verify "$tmp_dir/$archive" \
+    --repo "$repository" \
+    --signer-workflow "$repository/.github/workflows/release.yml" \
+    --source-ref "refs/tags/$version" \
+    --deny-self-hosted-runners \
+    || fail "release provenance verification failed for $archive"
 
   expected=$(awk -v name="$archive" '$2 == name || $2 == "./" name { print $1; exit }' "$tmp_dir/checksums.txt")
   [ -n "$expected" ] || fail "checksum not found for $archive"

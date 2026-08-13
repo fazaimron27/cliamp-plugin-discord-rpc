@@ -1,8 +1,10 @@
 package tests
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +46,9 @@ func TestHeartbeatDoesNotChangePresence(t *testing.T) {
 
 func TestReadPlaybackState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, []byte(`{"v":1,"session":"s","seq":2,"status":"playing","title":"Track"}`), 0o600); err != nil {
+	now := time.Now().Unix()
+	data := fmt.Sprintf(`{"v":1,"session":"s","seq":2,"status":"playing","title":"Track","heartbeat":%d,"updated_at":%d}`, now, now)
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	state, err := playback.Read(path)
@@ -53,5 +57,42 @@ func TestReadPlaybackState(t *testing.T) {
 	}
 	if state.Revision() != "s:2" {
 		t.Fatalf("Revision() = %q", state.Revision())
+	}
+}
+
+func TestReadPlaybackStateRejectsOversizedDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 65<<10)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := playback.Read(path); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReadPlaybackStateRejectsFutureTimestamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	future := time.Now().Add(time.Hour).Unix()
+	data := fmt.Sprintf(`{"v":1,"session":"s","seq":1,"status":"playing","title":"Track","heartbeat":%d,"updated_at":1}`, future)
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := playback.Read(path); err == nil || !strings.Contains(err.Error(), "future") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReadPlaybackStateRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	link := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(target, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := playback.Read(link); err == nil {
+		t.Fatal("expected symlink rejection")
 	}
 }

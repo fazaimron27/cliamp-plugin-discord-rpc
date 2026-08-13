@@ -33,8 +33,8 @@ schema version 1 after relevant events. Important fields are:
 
 The daemon combines `session` and `seq` to identify writes. Presence identity
 excludes `heartbeat`, so heartbeat-only writes do not reset Discord's timeline.
-The local `path` is retained for the state contract but is never included in a
-Discord payload or Last.fm request.
+Playback paths are used only in the plugin's in-memory transition logic and are
+not persisted, sent to Discord, or included in Last.fm requests.
 
 ## Repository Layout
 

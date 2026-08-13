@@ -4,7 +4,7 @@
 
 local p = plugin.register({
   name = "discord-rpc",
-  version = "1.1.0",
+  version = "1.1.1",
   description = "Publish now-playing state for the cliamp-rpcd Discord bridge",
   type = "hook",
 })
@@ -50,7 +50,6 @@ local function flush()
     year = st.year,
     duration = st.duration,
     position = st.position,
-    path = st.path,
     stream = st.stream,
     heartbeat = os.time(),
     updated_at = st.updated_at,

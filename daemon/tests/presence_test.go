@@ -32,13 +32,13 @@ func TestPresenceUsesFallbacks(t *testing.T) {
 	}
 }
 
-func TestPresenceNeverLeaksPath(t *testing.T) {
-	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Path: "/home/user/private.flac"}
+func TestPresencePayloadContainsOnlyPublicTrackMetadata(t *testing.T) {
+	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist"}
 	data, err := json.Marshal(presence.Build(state, presence.Options{}, "", time.Now()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), state.Path) {
-		t.Fatalf("path leaked into activity: %s", data)
+	if strings.Contains(string(data), "path") {
+		t.Fatalf("unexpected path field in activity: %s", data)
 	}
 }

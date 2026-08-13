@@ -18,7 +18,7 @@ Before installing, make sure you have:
 - A Discord account and access to the
   [Discord Developer Portal](https://discord.com/developers/applications).
 - A Last.fm account for creating an API key.
-- `curl`, `sha256sum`, `tar`, and `systemctl` when installing from a release.
+- `curl`, `gh`, `sha256sum`, `tar`, and `systemctl` when installing from a release.
 - Git and Go 1.25 or newer only when self-deploying from source.
 
 The daemon and Discord must run in the same desktop user session. The supplied
@@ -81,7 +81,7 @@ content; add the `plugins.discord-rpc` section alongside your other settings.
 ## 4A. Install from release
 
 Use this path for a normal installation on `amd64` or `arm64`. It installs the
-plugin through Cliamp and downloads the published `v1.1.0` daemon; Go is not
+plugin through Cliamp and downloads the published `v1.1.1` daemon; Go is not
 required.
 
 ### Install the plugin
@@ -115,7 +115,8 @@ The installer:
 
 - Detects `amd64` or `arm64`.
 - Downloads the matching archive from the
-  [v1.1.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.1.0).
+  [v1.1.1 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.1.1).
+- Verifies the archive's GitHub Actions provenance attestation, bound to this repository's release workflow.
 - Verifies the archive against the published SHA-256 checksum.
 - Installs `cliamp-rpcd` to `~/.local/bin`.
 - Installs `cliamp-rpcd.service` as a systemd user service.

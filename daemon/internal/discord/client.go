@@ -47,6 +47,11 @@ func (c *Client) Connect(ctx context.Context) error {
 			lastErr = err
 			continue
 		}
+		if err := verifyPeer(conn); err != nil {
+			lastErr = err
+			_ = conn.Close()
+			continue
+		}
 		c.conn = conn
 		if err := c.handshake(); err != nil {
 			lastErr = err
