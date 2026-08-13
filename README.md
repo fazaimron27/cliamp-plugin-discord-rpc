@@ -4,11 +4,14 @@ Discord Rich Presence for [Cliamp](https://www.cliamp.stream/). The Lua plugin
 writes the current playback state to disk, and the `cliamp-rpcd` daemon sends it
 to the local Discord desktop client.
 
+> [!NOTE]
+> This project is currently developed and tested only on Linux. Prebuilt daemon
+> releases are available for `x86_64`/`amd64` and `aarch64`/`arm64`.
+
 ## Prerequisites
 
 Before installing, make sure you have:
 
-- Linux on `x86_64`/`amd64` or `aarch64`/`arm64`.
 - Cliamp installed and available as `cliamp`.
 - The Discord desktop client. Discord in a web browser does not expose the local
   IPC socket used by Rich Presence.
