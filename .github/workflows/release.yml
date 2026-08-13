@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Validate and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run tests
+        run: go test -race ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Build release archives
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            package="cliamp-plugin-discord-rpc_${GITHUB_REF_NAME}_linux_${arch}"
+            stage="dist/${package}"
+            mkdir -p "${stage}"
+            GOOS=linux GOARCH="${arch}" go build \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o "${stage}/cliamp-rpcd" \
+              ./daemon/cmd/cliamp-rpcd
+            cp discord-rpc.lua cliamp-rpcd.service README.md "${stage}/"
+            tar \
+              --sort=name \
+              --mtime='UTC 1970-01-01' \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              -czf "dist/${package}.tar.gz" \
+              -C dist "${package}"
+            rm -rf "${stage}"
+          done
+          cd dist
+          sha256sum ./*.tar.gz > checksums.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/*.tar.gz \
+            dist/checksums.txt \
+            --generate-notes \
+            --title "${GITHUB_REF_NAME}" \
+            --verify-tag
