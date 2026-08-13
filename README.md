@@ -94,7 +94,7 @@ When not using the systemd service, start the Discord desktop client and run:
 ./cliamp-rpcd
 ```
 
-The default state path is `~/.local/share/cliamp/rpc-state.json`. Run `./cliamp-rpcd -help` for all options.
+The default state path is `~/.local/share/cliamp/rpc-state.json`. Run `./cliamp-rpcd --help` for all options.
 
 The daemon reads its dedicated credentials from `[plugins.discord-rpc]` in
 `~/.config/cliamp/config.toml`:
