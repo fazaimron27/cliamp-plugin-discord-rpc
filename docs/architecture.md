@@ -55,6 +55,7 @@ cliamp-plugin-discord-rpc/
 ├── docs/
 ├── discord-rpc.lua
 ├── install.sh
+├── uninstall.sh
 ├── cliamp-rpcd.service
 └── go.mod
 ```

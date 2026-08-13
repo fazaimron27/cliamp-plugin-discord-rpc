@@ -132,6 +132,11 @@ else
   printf 'systemctl not found; reload your systemd user manager manually.\n' >&2
 fi
 
-printf '\nInstalled cliamp-rpcd %s to %s/cliamp-rpcd\n' "$installed_version" "$bin_dir"
-printf 'Configure ~/.config/cliamp/config.toml, then run:\n'
-printf '  systemctl --user enable --now cliamp-rpcd\n'
+printf '\nInstalled cliamp-rpcd %s\n' "$installed_version"
+printf '  Daemon:  %s/cliamp-rpcd\n' "$bin_dir"
+printf '  Service: %s/cliamp-rpcd.service\n' "$service_dir"
+printf 'The user service was installed but not enabled or started.\n'
+printf 'Configure ~/.config/cliamp/config.toml, then run manually:\n'
+printf '  %s/cliamp-rpcd\n' "$bin_dir"
+printf 'Or enable the user service:\n'
+printf '  systemctl --user enable --now cliamp-rpcd.service\n'

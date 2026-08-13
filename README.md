@@ -120,7 +120,21 @@ The installer:
 - Installs `cliamp-rpcd.service` as a systemd user service.
 - Reloads the systemd user manager without starting the daemon.
 
-Run `./install.sh --help` to see version and destination overrides. Continue at
+The user service is installed but deliberately left disabled and inactive. The
+installer prints both installed paths and does not start the daemon.
+
+Run `./install.sh --help` to see version and destination overrides. To remove
+only the daemon and service later, review and run:
+
+```sh
+less uninstall.sh
+./uninstall.sh
+```
+
+The uninstaller stops and disables the user service if it is active, removes the
+daemon and unit file, and preserves the Cliamp plugin, configuration, and
+playback state. Use `--bin-dir` and `--service-dir` if you installed to custom
+locations. Continue at
 [Start and verify](#5-start-and-verify).
 
 ## 4B. Self-deploy from source
@@ -147,6 +161,13 @@ cliamp plugins trust discord-rpc
 install -Dm755 ./cliamp-rpcd ~/.local/bin/cliamp-rpcd
 install -Dm644 ./cliamp-rpcd.service ~/.config/systemd/user/cliamp-rpcd.service
 systemctl --user daemon-reload
+```
+
+To remove a source deployment, run the repository's uninstaller from the same
+checkout or specify the matching custom directories:
+
+```sh
+./uninstall.sh
 ```
 
 Restart Cliamp after installing the Lua plugin. When you edit that file later,
