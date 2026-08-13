@@ -15,9 +15,8 @@ Before installing, make sure you have:
 - A Discord account and access to the
   [Discord Developer Portal](https://discord.com/developers/applications).
 - A Last.fm account for creating an API key.
-- Git for obtaining the repository.
 - `curl`, `sha256sum`, `tar`, and `systemctl` when installing from a release.
-- Go 1.25 or newer only when self-deploying from source.
+- Git and Go 1.25 or newer only when self-deploying from source.
 
 The daemon and Discord must run in the same desktop user session. The supplied
 service is a systemd user service and does not require root access.
@@ -56,15 +55,8 @@ application asset named `cliamp` will be used when artwork is unavailable.
 
 ## 3. Configure credentials
 
-Create the configuration directory and file if they do not exist:
-
-```sh
-mkdir -p ~/.config/cliamp
-touch ~/.config/cliamp/config.toml
-chmod 600 ~/.config/cliamp/config.toml
-```
-
-Open `~/.config/cliamp/config.toml` in your editor and add:
+Cliamp creates `~/.config/cliamp/config.toml` during its own setup. Open that
+file in your editor and add:
 
 ```toml
 [plugins.discord-rpc]
@@ -80,8 +72,8 @@ artwork, use an empty value:
 lastfm_api_key = ""
 ```
 
-Protect the API credentials by keeping the configuration file readable only by
-your user. The `chmod` command above sets the required permissions.
+The configuration file is managed by Cliamp. Do not replace its existing
+content; add the `plugins.discord-rpc` section alongside your other settings.
 
 ## 4A. Install from release
 
@@ -101,13 +93,19 @@ shown by Cliamp before approving it. Restart Cliamp after installation.
 
 ### Install the daemon
 
-Clone the repository so you can review and run the installer:
+Install the daemon directly from this repository:
 
 ```sh
-git clone https://github.com/fazaimron27/cliamp-plugin-discord-rpc.git
-cd cliamp-plugin-discord-rpc
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/main/install.sh | sh
+```
+
+This command downloads code and executes it. To review the installer first:
+
+```sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/main/install.sh
 less install.sh
-./install.sh --version v1.1.0
+sh install.sh
+rm install.sh
 ```
 
 The installer:
@@ -123,13 +121,17 @@ The installer:
 The user service is installed but deliberately left disabled and inactive. The
 installer prints both installed paths and does not start the daemon.
 
-Run `./install.sh --help` to see version and destination overrides. To remove
-only the daemon and service later, review and run:
+To install a specific version or use custom destinations, download the script
+first and pass options to it. Run `sh install.sh --help` for details.
+
+To remove only the daemon and service later:
 
 ```sh
-less uninstall.sh
-./uninstall.sh
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/main/uninstall.sh | sh
 ```
+
+To review the uninstaller first, download it with `curl -fsSL -o uninstall.sh`,
+inspect it, then run `sh uninstall.sh`.
 
 The uninstaller stops and disables the user service if it is active, removes the
 daemon and unit file, and preserves the Cliamp plugin, configuration, and
@@ -178,31 +180,35 @@ restart Cliamp.
 
 1. Start the Discord desktop client and sign in.
 2. Start or restart Cliamp and play a track.
-3. Enable and start the daemon:
+3. Run the daemon manually:
 
 ```sh
-systemctl --user enable --now cliamp-rpcd
-```
-
-4. Check the service:
-
-```sh
-systemctl --user status cliamp-rpcd
-journalctl --user -u cliamp-rpcd -f
-```
-
-A playing track should appear on your Discord profile. Pausing or stopping
-playback clears the activity. The daemon reconnects automatically if Discord is
-started or restarted later.
-
-To run the daemon in the foreground instead of using systemd:
-
-```sh
-systemctl --user stop cliamp-rpcd
 ~/.local/bin/cliamp-rpcd
 ```
 
+A playing track should appear on your Discord profile. Keep this terminal open
+while using the daemon and press `Ctrl+C` to stop it. Pausing or stopping
+playback clears the activity, and the daemon reconnects automatically if
+Discord is started or restarted later.
+
 Run `~/.local/bin/cliamp-rpcd --help` for all daemon options.
+
+### Optional systemd user service
+
+To run the daemon automatically in your desktop session instead of keeping it
+in a terminal:
+
+```sh
+systemctl --user enable --now cliamp-rpcd.service
+systemctl --user status cliamp-rpcd.service
+journalctl --user -u cliamp-rpcd.service -f
+```
+
+Stop and disable automatic startup with:
+
+```sh
+systemctl --user disable --now cliamp-rpcd.service
+```
 
 ## Troubleshooting
 
