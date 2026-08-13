@@ -1,14 +1,14 @@
 # Architecture
 
-CLIamp Discord RPC is split into a sandboxed Lua plugin and a native Go daemon.
-The split is required by CLIamp's security model: the plugin can observe player
+Cliamp Discord RPC is split into a sandboxed Lua plugin and a native Go daemon.
+The split is required by Cliamp's security model: the plugin can observe player
 events and write allowlisted files, but only the daemon can keep a connection to
 Discord's local IPC socket and call Last.fm.
 
 ## Data Flow
 
 ```text
-CLIamp events
+Cliamp events
   -> discord-rpc.lua
   -> ~/.local/share/cliamp/rpc-state.json
   -> cliamp-rpcd
@@ -17,7 +17,7 @@ CLIamp events
 ```
 
 The root-level `discord-rpc.lua` file is also the repository entrypoint required
-by CLIamp's `cliamp-plugin-<name>` install-source convention.
+by Cliamp's `cliamp-plugin-<name>` install-source convention.
 
 ## State Contract
 
@@ -38,7 +38,7 @@ Discord payload or Last.fm request.
 
 ## Repository Layout
 
-The native application is grouped under `daemon/`, while the CLIamp plugin
+The native application is grouped under `daemon/`, while the Cliamp plugin
 entrypoint remains at the repository root:
 
 ```text
@@ -67,7 +67,7 @@ separate while retaining Go's `internal` import protection: code beneath
 
 - `daemon/cmd/cliamp-rpcd` handles process startup and operating-system signals.
 - `daemon/internal/config` loads flags, environment overrides, and
-  `[plugins.discord-rpc]` from CLIamp's TOML config.
+  `[plugins.discord-rpc]` from Cliamp's TOML config.
 - `daemon/internal/playback` validates state documents and defines visibility rules.
 - `daemon/internal/presence` builds typed Discord Listening activity payloads.
 - `daemon/internal/artwork` resolves and caches album images from Last.fm.
@@ -84,7 +84,7 @@ reliable Spotify-like behavior. Resuming publishes a new activity anchored to
 the saved playback position.
 
 If the heartbeat exceeds the configured maximum age, the daemon treats the
-state as stale and clears the activity. This handles an unclean CLIamp exit.
+state as stale and clears the activity. This handles an unclean Cliamp exit.
 
 ## Artwork
 

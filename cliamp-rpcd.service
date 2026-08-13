@@ -1,5 +1,5 @@
 [Unit]
-Description=CLIamp Discord Rich Presence bridge
+Description=Cliamp Discord Rich Presence bridge
 After=graphical-session.target
 
 [Service]

@@ -18,7 +18,7 @@ const DefaultStateMaxAge = 45 * time.Second
 type Config struct {
 	ApplicationID string
 	StatePath     string
-	CLIampConfig  string
+	CliampConfig  string
 	LargeImage    string
 	LargeText     string
 	LastFMAPIKey  string
@@ -27,7 +27,7 @@ type Config struct {
 }
 
 // Load parses command-line arguments, then fills credentials from environment
-// variables and the dedicated [plugins.discord-rpc] CLIamp config section.
+// variables and the dedicated [plugins.discord-rpc] Cliamp config section.
 func Load(args []string) (Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -38,10 +38,10 @@ func Load(args []string) (Config, error) {
 	flags := flag.NewFlagSet("cliamp-rpcd", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.StringVar(&cfg.ApplicationID, "app-id", os.Getenv("CLIAMP_DISCORD_APP_ID"), "Discord application ID (or CLIAMP_DISCORD_APP_ID)")
-	flags.StringVar(&cfg.StatePath, "state", filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json"), "CLIamp RPC state file")
-	flags.StringVar(&cfg.CLIampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "CLIamp config file containing Discord RPC credentials")
+	flags.StringVar(&cfg.StatePath, "state", filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json"), "Cliamp RPC state file")
+	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file containing Discord RPC credentials")
 	flags.StringVar(&cfg.LargeImage, "large-image", envOr("CLIAMP_DISCORD_LARGE_IMAGE", "cliamp"), "Discord application asset key")
-	flags.StringVar(&cfg.LargeText, "large-text", envOr("CLIAMP_DISCORD_LARGE_TEXT", "CLIamp"), "large image hover text")
+	flags.StringVar(&cfg.LargeText, "large-text", envOr("CLIAMP_DISCORD_LARGE_TEXT", "Cliamp"), "large image hover text")
 	flags.DurationVar(&cfg.PollInterval, "poll", time.Second, "state polling interval")
 	flags.DurationVar(&cfg.StateMaxAge, "max-age", DefaultStateMaxAge, "clear presence after state heartbeat becomes stale")
 	if err := flags.Parse(args); err != nil {
@@ -49,14 +49,14 @@ func Load(args []string) (Config, error) {
 	}
 
 	if cfg.ApplicationID == "" {
-		cfg.ApplicationID, err = readTOMLValue(cfg.CLIampConfig, "plugins.discord-rpc", "app_id")
+		cfg.ApplicationID, err = readTOMLValue(cfg.CliampConfig, "plugins.discord-rpc", "app_id")
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return Config{}, fmt.Errorf("read Discord RPC app ID: %w", err)
 		}
 	}
 	cfg.LastFMAPIKey = os.Getenv("CLIAMP_DISCORD_LASTFM_API_KEY")
 	if cfg.LastFMAPIKey == "" {
-		cfg.LastFMAPIKey, err = readTOMLValue(cfg.CLIampConfig, "plugins.discord-rpc", "lastfm_api_key")
+		cfg.LastFMAPIKey, err = readTOMLValue(cfg.CliampConfig, "plugins.discord-rpc", "lastfm_api_key")
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return Config{}, fmt.Errorf("read Discord Last.fm API key: %w", err)
 		}

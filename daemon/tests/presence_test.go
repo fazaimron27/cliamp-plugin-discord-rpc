@@ -26,7 +26,7 @@ func TestPresenceBuildsPlayingActivity(t *testing.T) {
 
 func TestPresenceUsesFallbacks(t *testing.T) {
 	state := playback.State{Status: "playing", Title: "Track", Album: "Album", Duration: 10, UpdatedAt: 1000}
-	activity := presence.Build(state, presence.Options{LargeImage: "cliamp", LargeText: "CLIamp"}, "", time.Unix(1000, 0))
+	activity := presence.Build(state, presence.Options{LargeImage: "cliamp", LargeText: "Cliamp"}, "", time.Unix(1000, 0))
 	if activity.State != "Unknown artist" || activity.Assets.LargeImage != "cliamp" || activity.Assets.LargeText != "Album" {
 		t.Fatalf("activity = %+v", activity)
 	}

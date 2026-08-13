@@ -1,4 +1,4 @@
--- discord-rpc: publishes CLIamp now-playing state for cliamp-rpcd.
+-- discord-rpc: publishes Cliamp now-playing state for cliamp-rpcd.
 --
 -- This plugin holds no permissions. A separate daemon owns Discord IPC.
 

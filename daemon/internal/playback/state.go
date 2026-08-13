@@ -1,4 +1,4 @@
-// Package playback reads and validates state produced by the CLIamp plugin.
+// Package playback reads and validates state produced by the Cliamp plugin.
 package playback
 
 import (
@@ -45,7 +45,7 @@ func Read(path string) (State, error) {
 }
 
 // Revision uniquely identifies a write. Sequence alone is insufficient because
-// the Lua plugin resets it whenever CLIamp starts a new session.
+// the Lua plugin resets it whenever Cliamp starts a new session.
 func (s State) Revision() string {
 	return s.Session + ":" + strconv.FormatInt(s.Sequence, 10)
 }

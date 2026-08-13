@@ -1,4 +1,4 @@
-// Package daemon coordinates CLIamp state, artwork lookup, and Discord IPC.
+// Package daemon coordinates Cliamp state, artwork lookup, and Discord IPC.
 package daemon
 
 import (
