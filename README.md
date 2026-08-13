@@ -45,36 +45,39 @@ Restart Cliamp after installing or updating the plugin.
 
 ## Install daemon
 
-Download the `v1.0.0` archive for your Linux architecture and verify it against
-[published checksums](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/download/v1.0.0/checksums.txt):
+Review the installer, then run it from a repository checkout:
 
 ```sh
-version=v1.0.0
-case "$(uname -m)" in
-  x86_64) arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
-  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-esac
-archive="cliamp-plugin-discord-rpc_${version}_linux_${arch}.tar.gz"
-base_url="https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/download/${version}"
-curl -fLO "${base_url}/${archive}"
-curl -fLO "${base_url}/checksums.txt"
-sha256sum --ignore-missing -c checksums.txt
-tar -xzf "${archive}"
-cd "cliamp-plugin-discord-rpc_${version}_linux_${arch}"
+less ./install.sh
+./install.sh
 ```
 
-Install the daemon and its systemd user service, then continue with the
-configuration below before starting it:
+The installer detects Linux `amd64` or `arm64`, downloads the `v1.0.0` release,
+verifies the archive against the published SHA-256 checksum, and installs the
+daemon and systemd user service. It does not start the service before you add
+your Discord credentials below.
+
+To install another release or use custom destinations:
+
+```sh
+./install.sh --version v1.0.0 \
+  --bin-dir "$HOME/.local/bin" \
+  --service-dir "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+```
+
+The same script is included in future release archives and installs their
+packaged binary without downloading it again. Run `./install.sh --help` for all
+options.
+
+For a manual installation, download the archive and `checksums.txt` from the
+[v1.0.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.0.0),
+verify it with `sha256sum -c checksums.txt`, extract it, then install the files:
 
 ```sh
 install -Dm755 cliamp-rpcd ~/.local/bin/cliamp-rpcd
 install -Dm644 cliamp-rpcd.service ~/.config/systemd/user/cliamp-rpcd.service
 systemctl --user daemon-reload
 ```
-
-See the [v1.0.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.0.0)
-for release notes and direct asset downloads.
 
 ## Build daemon from source
 
