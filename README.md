@@ -86,7 +86,7 @@ your user. The `chmod` command above sets the required permissions.
 ## 4A. Install from release
 
 Use this path for a normal installation on `amd64` or `arm64`. It installs the
-plugin through Cliamp and downloads the published `v1.0.0` daemon; Go is not
+plugin through Cliamp and downloads the published `v1.1.0` daemon; Go is not
 required.
 
 ### Install the plugin
@@ -107,14 +107,14 @@ Clone the repository so you can review and run the installer:
 git clone https://github.com/fazaimron27/cliamp-plugin-discord-rpc.git
 cd cliamp-plugin-discord-rpc
 less install.sh
-./install.sh --version v1.0.0
+./install.sh --version v1.1.0
 ```
 
 The installer:
 
 - Detects `amd64` or `arm64`.
 - Downloads the matching archive from the
-  [v1.0.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.0.0).
+  [v1.1.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.1.0).
 - Verifies the archive against the published SHA-256 checksum.
 - Installs `cliamp-rpcd` to `~/.local/bin`.
 - Installs `cliamp-rpcd.service` as a systemd user service.

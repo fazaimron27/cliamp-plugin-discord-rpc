@@ -4,7 +4,7 @@
 
 local p = plugin.register({
   name = "discord-rpc",
-  version = "1.0.0",
+  version = "1.1.0",
   description = "Publish now-playing state for the cliamp-rpcd Discord bridge",
   type = "hook",
 })

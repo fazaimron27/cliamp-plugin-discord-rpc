@@ -72,7 +72,7 @@ func (r *LastFM) Resolve(ctx context.Context, artist, title string) (string, err
 	if err != nil {
 		return "", err
 	}
-	request.Header.Set("User-Agent", "cliamp-rpcd/1.0")
+	request.Header.Set("User-Agent", "cliamp-rpcd/1.1.0")
 	response, err := r.client.Do(request)
 	if err != nil {
 		return "", err
