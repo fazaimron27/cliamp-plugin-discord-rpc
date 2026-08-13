@@ -30,7 +30,7 @@ enhancement.
 ## Install from release
 
 Use this path for a normal installation on `amd64` or `arm64`. It installs the
-plugin through Cliamp and downloads the published `v1.3.0` daemon; Go is not
+plugin through Cliamp and downloads the published `v1.4.0` daemon; Go is not
 required.
 
 ### Install the plugin
@@ -64,7 +64,7 @@ The installer:
 
 - Detects `amd64` or `arm64`.
 - Downloads the matching archive from the
-  [v1.3.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.3.0).
+  [v1.4.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0).
 - Verifies the archive's GitHub Actions provenance attestation, bound to this repository's release workflow.
 - Verifies the archive against the published SHA-256 checksum.
 - Installs `cliamp-rpcd` to `~/.local/bin`.
@@ -143,7 +143,9 @@ while using the daemon and press `Ctrl+C` to stop it. Pausing or stopping
 playback clears the activity, and the daemon reconnects automatically if
 Discord is started or restarted later.
 
-Run `~/.local/bin/cliamp-rpcd --help` for all daemon options.
+Run `~/.local/bin/cliamp-rpcd --help` for all daemon options. `--poll` controls
+the fallback state polling interval used only when filesystem watching is
+unavailable; normal operation is event-driven.
 
 ### Optional systemd user service
 
@@ -232,9 +234,13 @@ Last.fm API key is optional and artwork lookup is disabled when it is empty.
 ## How it works
 
 The plugin writes playback state to
-`~/.local/share/cliamp/rpc-state.json`. The daemon reads that file, resolves
-optional album artwork through Last.fm, and updates Discord through its local
-IPC socket. Heartbeats clear stale activity after an unclean Cliamp exit.
+`~/.local/share/cliamp/rpc-state.json`. The daemon watches that file's parent
+directory and reads the latest snapshot when cliamp writes it. It then resolves
+optional album artwork through Last.fm and updates Discord through its local
+IPC socket. Separate timers handle heartbeat expiry, Discord reconnects, and
+presence refreshes. If filesystem notifications are unavailable, `--poll`
+provides a slow fallback interval. Heartbeats clear stale activity after an
+unclean Cliamp exit.
 
 See [Architecture](docs/architecture.md) for the state contract, package
 responsibilities, artwork flow, and failure behavior.

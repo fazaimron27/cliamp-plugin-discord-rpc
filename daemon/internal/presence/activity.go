@@ -13,6 +13,8 @@ const (
 	activityTypeListening = 2
 	statusDisplayState    = 1
 	maxFieldBytes         = 128
+	maxDetailsRunes       = 48
+	maxStateRunes         = 40
 )
 
 var staticButtons = []Button{
@@ -62,8 +64,8 @@ func Build(s playback.State, options Options, artworkURL string, now time.Time) 
 	}
 	activity := &Activity{
 		Type:              activityTypeListening,
-		Details:           truncate(s.Title, maxFieldBytes),
-		State:             truncate(artist, maxFieldBytes),
+		Details:           truncateRunes(s.Title, maxDetailsRunes),
+		State:             truncateRunes(artist, maxStateRunes),
 		StatusDisplayType: statusDisplayState,
 		Buttons:           append([]Button(nil), staticButtons...),
 	}
@@ -87,6 +89,15 @@ func Build(s playback.State, options Options, artworkURL string, now time.Time) 
 		activity.Timestamps = &Timestamps{Start: start, End: start + s.Duration}
 	}
 	return activity
+}
+
+func truncateRunes(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func truncate(value string, maxBytes int) string {

@@ -35,6 +35,34 @@ func TestPresenceUsesFallbacks(t *testing.T) {
 	}
 }
 
+func TestPresenceTruncatesVisibleTextForExpandedCard(t *testing.T) {
+	state := playback.State{
+		Status: "playing",
+		Title:  strings.Repeat("Long title ", 8),
+		Artist: strings.Repeat("Artist ", 10),
+	}
+	activity := presence.Build(state, presence.Options{}, "", time.Now())
+
+	if got := []rune(activity.Details); len(got) != 48 || string(got[45:]) != "..." {
+		t.Fatalf("details = %q (%d runes)", activity.Details, len(got))
+	}
+	if got := []rune(activity.State); len(got) != 40 || string(got[37:]) != "..." {
+		t.Fatalf("state = %q (%d runes)", activity.State, len(got))
+	}
+}
+
+func TestPresenceTruncationPreservesUTF8(t *testing.T) {
+	state := playback.State{Status: "playing", Title: strings.Repeat("界", 50), Artist: strings.Repeat("音", 42)}
+	activity := presence.Build(state, presence.Options{}, "", time.Now())
+
+	if !strings.HasSuffix(activity.Details, "...") || !strings.HasSuffix(activity.State, "...") {
+		t.Fatalf("activity = %+v", activity)
+	}
+	if len([]rune(activity.Details)) != 48 || len([]rune(activity.State)) != 40 {
+		t.Fatalf("details/state lengths = %d/%d", len([]rune(activity.Details)), len([]rune(activity.State)))
+	}
+}
+
 func TestPresencePayloadContainsOnlyPublicTrackMetadata(t *testing.T) {
 	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist"}
 	data, err := json.Marshal(presence.Build(state, presence.Options{}, "", time.Now()))

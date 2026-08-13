@@ -49,7 +49,7 @@ func Load(args []string) (Config, error) {
 	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file `path` containing Discord RPC credentials")
 	flags.StringVar(&cfg.LargeImage, "large-image", envOr("CLIAMP_DISCORD_LARGE_IMAGE", "cliamp"), "Discord application asset `key`")
 	flags.StringVar(&cfg.LargeText, "large-text", envOr("CLIAMP_DISCORD_LARGE_TEXT", "Cliamp"), "large image hover `text`")
-	flags.DurationVar(&cfg.PollInterval, "poll", time.Second, "state polling `duration`")
+	flags.DurationVar(&cfg.PollInterval, "poll", 10*time.Second, "fallback state polling `duration` when filesystem watching is unavailable")
 	flags.DurationVar(&cfg.StateMaxAge, "max-age", DefaultStateMaxAge, "clear presence after state heartbeat exceeds `duration`")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err

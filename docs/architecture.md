@@ -22,7 +22,9 @@ by Cliamp's `cliamp-plugin-<name>` install-source convention.
 ## State Contract
 
 The Lua plugin maintains a complete in-memory playback snapshot and writes JSON
-schema version 1 after relevant events. Important fields are:
+schema version 1 after relevant events. The daemon watches the state directory
+and reads the latest snapshot when the file changes; it does not poll during
+normal operation. Important fields are:
 
 - `session` identifies one plugin load.
 - `seq` increases for every write within a session.
@@ -77,7 +79,8 @@ separate while retaining Go's `internal` import protection: code beneath
 - `daemon/internal/artwork` resolves and caches album images from Last.fm.
 - `daemon/internal/discord` implements socket discovery, framing, handshake, and
   `SET_ACTIVITY` over Discord IPC.
-- `daemon/internal/daemon` polls state and coordinates the other packages.
+- `daemon/internal/statewatch` watches the state directory and coalesces file notifications.
+- `daemon/internal/daemon` reacts to state notifications and coordinates the other packages.
 
 ## Playback Behavior
 
@@ -104,7 +107,10 @@ ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
 
 ## Failure Handling
 
-Discord connection failures leave the daemon running. Each later poll retries
-socket discovery and handshake. A failed activity update closes the current
-connection so the next poll reconnects cleanly. On SIGINT or SIGTERM, the
-daemon clears the activity before closing the IPC socket.
+Discord connection failures leave the daemon running. A dedicated retry timer
+reconnects with bounded backoff, even when playback state does not change. A
+failed activity update closes the current connection so the next retry starts
+cleanly. Presence refresh and stale-heartbeat handling use independent timers.
+If filesystem watching is unavailable, the daemon temporarily uses slow
+fallback polling and retries the watcher. On SIGINT or SIGTERM, the daemon
+clears the activity before closing the IPC socket.

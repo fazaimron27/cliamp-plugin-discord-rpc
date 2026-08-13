@@ -87,7 +87,7 @@ func (r *LastFM) Resolve(ctx context.Context, artist, title string) (string, err
 	if err != nil {
 		return "", r.failed(key, err)
 	}
-	request.Header.Set("User-Agent", "cliamp-rpcd/1.3.0")
+	request.Header.Set("User-Agent", "cliamp-rpcd/1.4.0")
 	response, err := r.client.Do(request)
 	if err != nil {
 		return "", r.failed(key, fmt.Errorf("Last.fm request failed"))
