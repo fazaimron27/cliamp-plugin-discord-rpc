@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 )
 
@@ -37,13 +38,16 @@ func Load(args []string) (Config, error) {
 	cfg := Config{}
 	flags := flag.NewFlagSet("cliamp-rpcd", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	flags.StringVar(&cfg.ApplicationID, "app-id", os.Getenv("CLIAMP_DISCORD_APP_ID"), "Discord application ID (or CLIAMP_DISCORD_APP_ID)")
-	flags.StringVar(&cfg.StatePath, "state", filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json"), "Cliamp RPC state file")
-	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file containing Discord RPC credentials")
-	flags.StringVar(&cfg.LargeImage, "large-image", envOr("CLIAMP_DISCORD_LARGE_IMAGE", "cliamp"), "Discord application asset key")
-	flags.StringVar(&cfg.LargeText, "large-text", envOr("CLIAMP_DISCORD_LARGE_TEXT", "Cliamp"), "large image hover text")
-	flags.DurationVar(&cfg.PollInterval, "poll", time.Second, "state polling interval")
-	flags.DurationVar(&cfg.StateMaxAge, "max-age", DefaultStateMaxAge, "clear presence after state heartbeat becomes stale")
+	flags.Usage = func() {
+		writeUsage(flags)
+	}
+	flags.StringVar(&cfg.ApplicationID, "app-id", os.Getenv("CLIAMP_DISCORD_APP_ID"), "Discord application `ID` (or CLIAMP_DISCORD_APP_ID)")
+	flags.StringVar(&cfg.StatePath, "state", filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json"), "Cliamp RPC state file `path`")
+	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file `path` containing Discord RPC credentials")
+	flags.StringVar(&cfg.LargeImage, "large-image", envOr("CLIAMP_DISCORD_LARGE_IMAGE", "cliamp"), "Discord application asset `key`")
+	flags.StringVar(&cfg.LargeText, "large-text", envOr("CLIAMP_DISCORD_LARGE_TEXT", "Cliamp"), "large image hover `text`")
+	flags.DurationVar(&cfg.PollInterval, "poll", time.Second, "state polling `duration`")
+	flags.DurationVar(&cfg.StateMaxAge, "max-age", DefaultStateMaxAge, "clear presence after state heartbeat exceeds `duration`")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -63,12 +67,29 @@ func Load(args []string) (Config, error) {
 	}
 
 	if cfg.ApplicationID == "" {
-		return Config{}, errors.New("Discord application ID is required; set plugins.discord-rpc.app_id, CLIAMP_DISCORD_APP_ID, or pass -app-id")
+		return Config{}, errors.New("Discord application ID is required; set plugins.discord-rpc.app_id, CLIAMP_DISCORD_APP_ID, or pass --app-id")
 	}
 	if cfg.PollInterval <= 0 || cfg.StateMaxAge <= 0 {
 		return Config{}, errors.New("poll interval and max age must be positive")
 	}
 	return cfg, nil
+}
+
+func writeUsage(flags *flag.FlagSet) {
+	fmt.Fprintf(flags.Output(), "Usage: %s [options]\n", flags.Name())
+	writer := tabwriter.NewWriter(flags.Output(), 0, 4, 2, ' ', 0)
+	flags.VisitAll(func(option *flag.Flag) {
+		valueName, usage := flag.UnquoteUsage(option)
+		if valueName != "" {
+			valueName = " " + valueName
+		}
+		defaultValue := ""
+		if option.Name != "app-id" && option.DefValue != "" {
+			defaultValue = fmt.Sprintf(" (default %q)", option.DefValue)
+		}
+		fmt.Fprintf(writer, "  --%s%s\t%s%s\n", option.Name, valueName, usage, defaultValue)
+	})
+	_ = writer.Flush()
 }
 
 func envOr(name, fallback string) string {
