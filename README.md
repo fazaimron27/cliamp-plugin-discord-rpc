@@ -1,6 +1,6 @@
-# CLIamp Discord RPC Plugin
+# Cliamp Discord RPC Plugin
 
-Discord Rich Presence bridge for [CLIamp](https://www.cliamp.stream/). A sandboxed Lua hook publishes playback state to a JSON file, and `cliamp-rpcd` sends that state to the local Discord desktop client over Discord IPC.
+Discord Rich Presence bridge for [Cliamp](https://www.cliamp.stream/). A sandboxed Lua hook publishes playback state to a JSON file, and `cliamp-rpcd` sends that state to the local Discord desktop client over Discord IPC.
 
 See [Architecture](docs/architecture.md) for the state contract, package
 responsibilities, artwork flow, and failure behavior.
@@ -9,19 +9,19 @@ responsibilities, artwork flow, and failure behavior.
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Copy its Application ID.
-3. Under **Rich Presence > Art Assets**, upload a square CLIamp image named `cliamp`. Asset changes can take several minutes to propagate.
+3. Under **Rich Presence > Art Assets**, upload a square Cliamp image named `cliamp`. Asset changes can take several minutes to propagate.
 
 Discord only renders assets registered for the application. Local cover files cannot be passed through RPC. This bridge uses the `cliamp` application asset and shows the album as its hover text.
 
 ## Install plugin
 
-This repository follows CLIamp's install-source convention:
+This repository follows Cliamp's install-source convention:
 
 - Repository: `cliamp-plugin-discord-rpc`
 - Entrypoint: `discord-rpc.lua`
 - Installed plugin name: `discord-rpc`
 
-Install it through CLIamp's plugin manager:
+Install it through Cliamp's plugin manager:
 
 ```sh
 cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc
@@ -41,9 +41,42 @@ chmod 644 ~/.config/cliamp/plugins/discord-rpc.lua
 cliamp plugins trust discord-rpc
 ```
 
-Restart CLIamp after installing or updating the plugin.
+Restart Cliamp after installing or updating the plugin.
 
-## Build daemon
+## Install daemon
+
+Download the `v1.0.0` archive for your Linux architecture and verify it against
+[published checksums](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/download/v1.0.0/checksums.txt):
+
+```sh
+version=v1.0.0
+case "$(uname -m)" in
+  x86_64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+archive="cliamp-plugin-discord-rpc_${version}_linux_${arch}.tar.gz"
+base_url="https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/download/${version}"
+curl -fLO "${base_url}/${archive}"
+curl -fLO "${base_url}/checksums.txt"
+sha256sum --ignore-missing -c checksums.txt
+tar -xzf "${archive}"
+cd "cliamp-plugin-discord-rpc_${version}_linux_${arch}"
+```
+
+Install the daemon and its systemd user service, then continue with the
+configuration below before starting it:
+
+```sh
+install -Dm755 cliamp-rpcd ~/.local/bin/cliamp-rpcd
+install -Dm644 cliamp-rpcd.service ~/.config/systemd/user/cliamp-rpcd.service
+systemctl --user daemon-reload
+```
+
+See the [v1.0.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.0.0)
+for release notes and direct asset downloads.
+
+## Build daemon from source
 
 ```sh
 go build -o cliamp-rpcd ./daemon/cmd/cliamp-rpcd
@@ -52,7 +85,7 @@ chmod 755 ./cliamp-rpcd
 
 ## Run
 
-Start the Discord desktop client, then run:
+When not using the systemd service, start the Discord desktop client and run:
 
 ```sh
 ./cliamp-rpcd
@@ -78,12 +111,12 @@ the values in this section.
 
 ## systemd user service
 
+The release installation above puts the service in the expected user directory.
+For a source build, install both files manually:
+
 ```sh
-mkdir -p ~/.local/bin ~/.config/systemd/user
-cp ./cliamp-rpcd ~/.local/bin/cliamp-rpcd
-chmod 755 ~/.local/bin/cliamp-rpcd
-cp ./cliamp-rpcd.service ~/.config/systemd/user/cliamp-rpcd.service
-chmod 644 ~/.config/systemd/user/cliamp-rpcd.service
+install -Dm755 ./cliamp-rpcd ~/.local/bin/cliamp-rpcd
+install -Dm644 ./cliamp-rpcd.service ~/.config/systemd/user/cliamp-rpcd.service
 ```
 
 The service reads `app_id` and `lastfm_api_key` from
@@ -96,11 +129,11 @@ systemctl --user enable --now cliamp-rpcd
 journalctl --user -u cliamp-rpcd -f
 ```
 
-After editing the Lua plugin, approve its new hash with `cliamp plugins trust discord-rpc` and restart CLIamp.
+After editing the Lua plugin, approve its new hash with `cliamp plugins trust discord-rpc` and restart Cliamp.
 
 ## Behavior
 
 - Playing tracks use Discord's Listening activity type and show an elapsed/remaining timeline.
-- Paused or stopped playback, CLIamp shutdown, or a stale heartbeat clears the activity.
+- Paused or stopped playback, Cliamp shutdown, or a stale heartbeat clears the activity.
 - Resuming playback restores the activity and timeline from the saved position.
 - The daemon reconnects automatically when Discord starts or restarts.
