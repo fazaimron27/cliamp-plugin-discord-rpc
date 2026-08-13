@@ -1,0 +1,12 @@
+[Unit]
+Description=CLIamp Discord Rich Presence bridge
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cliamp-rpcd
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
