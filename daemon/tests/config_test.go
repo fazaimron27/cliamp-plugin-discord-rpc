@@ -12,6 +12,23 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 )
 
+func TestConfigUsesBuiltInApplicationID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
+	t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "")
+
+	cfg, err := config.Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ApplicationID != config.DefaultApplicationID {
+		t.Fatalf("application ID = %q, want built-in default", cfg.ApplicationID)
+	}
+	if cfg.LastFMAPIKey != "" {
+		t.Fatalf("Last.fm API key = %q, want disabled by default", cfg.LastFMAPIKey)
+	}
+}
+
 func TestConfigUsesDedicatedPluginSection(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -32,7 +49,7 @@ func TestConfigUsesDedicatedPluginSection(t *testing.T) {
 	}
 }
 
-func TestConfigEnvironmentOverridesFile(t *testing.T) {
+func TestConfigEnvironmentOverridesFileAndBuiltInDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "env-app")
 	t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "env-key")
@@ -45,13 +62,16 @@ func TestConfigEnvironmentOverridesFile(t *testing.T) {
 	}
 }
 
-func TestConfigRequiresApplicationID(t *testing.T) {
+func TestConfigCommandLineOverridesEnvironment(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
-	if _, err := config.Load(nil); err == nil {
-		t.Fatal("expected missing application ID error")
-	} else if !strings.Contains(err.Error(), "--app-id") {
-		t.Fatalf("error = %q", err)
+	t.Setenv("CLIAMP_DISCORD_APP_ID", "env-app")
+
+	cfg, err := config.Load([]string{"--app-id", "flag-app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ApplicationID != "flag-app" {
+		t.Fatalf("application ID = %q, want command-line override", cfg.ApplicationID)
 	}
 }
 

@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-const DefaultStateMaxAge = 45 * time.Second
+const (
+	DefaultStateMaxAge   = 45 * time.Second
+	DefaultApplicationID = "1537329890829926400"
+)
 
 // Config contains all runtime settings needed by the daemon.
 type Config struct {
@@ -67,7 +70,7 @@ func Load(args []string) (Config, error) {
 	}
 
 	if cfg.ApplicationID == "" {
-		return Config{}, errors.New("Discord application ID is required; set plugins.discord-rpc.app_id, CLIAMP_DISCORD_APP_ID, or pass --app-id")
+		cfg.ApplicationID = DefaultApplicationID
 	}
 	if cfg.PollInterval <= 0 || cfg.StateMaxAge <= 0 {
 		return Config{}, errors.New("poll interval and max age must be positive")
