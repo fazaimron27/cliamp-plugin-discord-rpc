@@ -27,6 +27,12 @@ jobs:
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
 
+      - name: Check shell scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          shellcheck -s sh install.sh
+
       - name: Run tests
         run: go test -race ./...
 
