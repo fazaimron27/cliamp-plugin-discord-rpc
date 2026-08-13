@@ -81,7 +81,7 @@ content; add the `plugins.discord-rpc` section alongside your other settings.
 ## 4A. Install from release
 
 Use this path for a normal installation on `amd64` or `arm64`. It installs the
-plugin through Cliamp and downloads the published `v1.1.1` daemon; Go is not
+plugin through Cliamp and downloads the published `v1.2.0` daemon; Go is not
 required.
 
 ### Install the plugin
@@ -115,7 +115,7 @@ The installer:
 
 - Detects `amd64` or `arm64`.
 - Downloads the matching archive from the
-  [v1.1.1 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.1.1).
+  [v1.2.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.2.0).
 - Verifies the archive's GitHub Actions provenance attestation, bound to this repository's release workflow.
 - Verifies the archive against the published SHA-256 checksum.
 - Installs `cliamp-rpcd` to `~/.local/bin`.

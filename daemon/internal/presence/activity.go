@@ -15,6 +15,11 @@ const (
 	maxFieldBytes         = 128
 )
 
+var staticButtons = []Button{
+	{Label: "Get Cliamp", URL: "https://www.cliamp.stream/"},
+	{Label: "View Plugin", URL: "https://github.com/fazaimron27/cliamp-plugin-discord-rpc"},
+}
+
 // Options controls the static fallback asset shown when artwork is unavailable.
 type Options struct {
 	LargeImage string
@@ -30,6 +35,7 @@ type Activity struct {
 	Instance          bool        `json:"instance"`
 	Assets            *Assets     `json:"assets,omitempty"`
 	Timestamps        *Timestamps `json:"timestamps,omitempty"`
+	Buttons           []Button    `json:"buttons,omitempty"`
 }
 
 type Assets struct {
@@ -40,6 +46,11 @@ type Assets struct {
 type Timestamps struct {
 	Start int64 `json:"start"`
 	End   int64 `json:"end"`
+}
+
+type Button struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
 }
 
 // Build creates a Listening activity. Timestamp anchors come from the state
@@ -54,6 +65,7 @@ func Build(s playback.State, options Options, artworkURL string, now time.Time) 
 		Details:           truncate(s.Title, maxFieldBytes),
 		State:             truncate(artist, maxFieldBytes),
 		StatusDisplayType: statusDisplayState,
+		Buttons:           append([]Button(nil), staticButtons...),
 	}
 
 	if artworkURL != "" {

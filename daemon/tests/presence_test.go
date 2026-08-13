@@ -22,6 +22,9 @@ func TestPresenceBuildsPlayingActivity(t *testing.T) {
 	if activity.Timestamps == nil || activity.Timestamps.Start != 970 || activity.Timestamps.End != 1210 {
 		t.Fatalf("timestamps = %+v", activity.Timestamps)
 	}
+	if len(activity.Buttons) != 2 || activity.Buttons[0].Label != "Get Cliamp" || activity.Buttons[0].URL != "https://www.cliamp.stream/" || activity.Buttons[1].Label != "View Plugin" || activity.Buttons[1].URL != "https://github.com/fazaimron27/cliamp-plugin-discord-rpc" {
+		t.Fatalf("buttons = %+v", activity.Buttons)
+	}
 }
 
 func TestPresenceUsesFallbacks(t *testing.T) {
@@ -38,7 +41,7 @@ func TestPresencePayloadContainsOnlyPublicTrackMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "path") {
-		t.Fatalf("unexpected path field in activity: %s", data)
+	if strings.Contains(string(data), "path") || !strings.Contains(string(data), "Get Cliamp") || !strings.Contains(string(data), "View Plugin") {
+		t.Fatalf("unexpected activity payload: %s", data)
 	}
 }
