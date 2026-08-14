@@ -20,12 +20,14 @@ is not yet part of an official Cliamp release. Use one of these combinations:
 - **Official Cliamp releases:** use this project's legacy
   [`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0),
   which transports playback through `rpc-state.json` and does not require the
-  pub/sub API.
+  pub/sub API. Follow the [pinned v1.4.0 installation](#legacy-v140-for-official-cliamp-releases)
+  below.
 
+The Lua plugin and daemon must use the same release line: pair v1.5.0 with
+v1.5.0, or v1.4.0 with v1.4.0. The transports are intentionally incompatible.
 Do not install the v1.5.0 Lua plugin into an official Cliamp build that lacks
-`p:publish()`. Its event handlers will fail when they try to publish, and no
-playback events will reach the daemon. For v1.4.0 installation steps, use the
-[README at the v1.4.0 tag](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/tree/v1.4.0#readme).
+`p:publish()`; its event handlers will fail when they try to publish, and no
+playback events will reach the daemon.
 
 ## Prerequisites
 
@@ -78,7 +80,7 @@ resolves the new binary with `command -v cliamp`.
 ### Install the plugin
 
 ```sh
-cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc
+cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.5.0
 cliamp plugins trust discord-rpc
 ```
 
@@ -90,13 +92,13 @@ shown by Cliamp before approving it. Restart Cliamp after installation.
 Install the daemon directly from this repository:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.5.0/install.sh | sh
 ```
 
 This command downloads code and executes it. To review the installer first:
 
 ```sh
-curl -fsSL -o install.sh https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/main/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.5.0/install.sh
 less install.sh
 sh install.sh
 rm install.sh
@@ -122,7 +124,7 @@ first and pass options to it. Run `sh install.sh --help` for details.
 To remove only the daemon and service later:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.5.0/uninstall.sh | sh
 ```
 
 To review the uninstaller first, download it with `curl -fsSL -o uninstall.sh`,
@@ -133,6 +135,22 @@ daemon and unit file, and preserves the Cliamp plugin and configuration. Use
 `--bin-dir` and `--service-dir` if you installed to custom locations. Continue
 at [Start and verify](#start-and-verify).
 
+## Legacy v1.4.0 for official Cliamp releases
+
+If you want to keep an official Cliamp build without plugin pub/sub, pin both
+parts of this project to v1.4.0:
+
+```sh
+cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.4.0
+cliamp plugins trust discord-rpc
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.4.0/install.sh | sh
+```
+
+Restart Cliamp after trusting the plugin. If another `discord-rpc` version is
+already installed, remove it first with `cliamp plugins remove discord-rpc`.
+The v1.4.0 plugin and daemon use `rpc-state.json`; do not mix either component
+with v1.5.0.
+
 ## Self-deploy from source
 
 Use this path for development, an architecture without a prebuilt archive, or
@@ -142,7 +160,8 @@ not use the release installer.
 ### Build the daemon
 
 ```sh
-git clone https://github.com/fazaimron27/cliamp-plugin-discord-rpc.git
+git clone --branch v1.5.0 --single-branch \
+  https://github.com/fazaimron27/cliamp-plugin-discord-rpc.git
 cd cliamp-plugin-discord-rpc
 go test ./...
 go vet ./...
@@ -170,8 +189,8 @@ Restart Cliamp after installing the Lua plugin. When you edit that file later,
 run `cliamp plugins trust discord-rpc` again to approve its new hash, then
 restart Cliamp. If startup reports `attempt to call a non-function object` for
 `publish`, or the daemon reports that Cliamp rejected `subscribe`, verify that
-you installed the linked Cliamp pub/sub branch. Otherwise use plugin release
-v1.4.0 with the official Cliamp release.
+you installed the linked Cliamp pub/sub branch. Otherwise follow the
+[pinned v1.4.0 installation](#legacy-v140-for-official-cliamp-releases).
 
 ## Start and verify
 
@@ -270,8 +289,8 @@ Version 1.5.0 requires the
 [`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
 Cliamp branch. Confirm that the running `cliamp` executable was built from that
 branch, reinstall and trust `discord-rpc.lua`, then restart Cliamp. If you want
-to stay on an official Cliamp release, install this project's
-[`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0)
+to stay on an official Cliamp release, follow the
+[pinned v1.4.0 installation](#legacy-v140-for-official-cliamp-releases)
 instead.
 
 ### The service fails immediately
