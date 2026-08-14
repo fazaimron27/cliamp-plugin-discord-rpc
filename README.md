@@ -9,17 +9,37 @@ client. Playback state is not written to disk.
 > This project is currently developed and tested only on Linux. Prebuilt daemon
 > releases are available for `x86_64`/`amd64` and `aarch64`/`arm64`.
 
+## Compatibility
+
+The current `v1.5.0` release requires Cliamp's plugin event pub/sub API, which
+is not yet part of an official Cliamp release. Use one of these combinations:
+
+- **Fileless v1.5.0:** build and install the
+  [`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
+  Cliamp branch, then install this project's `v1.5.0` plugin and daemon.
+- **Official Cliamp releases:** use this project's legacy
+  [`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0),
+  which transports playback through `rpc-state.json` and does not require the
+  pub/sub API.
+
+Do not install the v1.5.0 Lua plugin into an official Cliamp build that lacks
+`p:publish()`. Its event handlers will fail when they try to publish, and no
+playback events will reach the daemon. For v1.4.0 installation steps, use the
+[README at the v1.4.0 tag](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/tree/v1.4.0#readme).
+
 ## Prerequisites
 
-Before installing, make sure you have:
+Before installing v1.5.0, make sure you have:
 
-- Cliamp with plugin event pub/sub support. Until that support is included in
-  an official release, build and install a compatible Cliamp checkout first.
+- Git and Go 1.26.5 or newer to build the temporary Cliamp branch.
+- Cliamp built from the
+  [`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
+  branch and available as `cliamp`.
 - The Discord desktop client. Discord in a web browser does not expose the local
   IPC socket used by Rich Presence.
 - A Discord account signed in to the desktop client.
 - `curl`, `gh`, `sha256sum`, `tar`, and `systemctl` when installing from a release.
-- Git and Go 1.25 or newer only when self-deploying from source.
+- Go 1.25 or newer when self-deploying the daemon from source.
 
 The daemon and Discord must run in the same desktop user session. The supplied
 service is a systemd user service and does not require root access.
@@ -29,11 +49,31 @@ daemon uses the community-maintained Cliamp Discord application by default and
 displays its static artwork. Album artwork through Last.fm is an optional
 enhancement.
 
-## Install from release
+## Install v1.5.0 from release
 
-Use this path for a normal installation on `amd64` or `arm64`. It installs the
-plugin through Cliamp and downloads the published `v1.5.0` daemon; Go is not
-required.
+Use this path for a normal v1.5.0 installation on `amd64` or `arm64` after
+installing the compatible Cliamp pub/sub branch. It installs the plugin through
+Cliamp and downloads the published `v1.5.0` daemon; Go is not required for the
+plugin or daemon.
+
+### Build the compatible Cliamp branch
+
+Until plugin pub/sub reaches an official Cliamp release, build and install the
+linked branch before installing v1.5.0:
+
+```sh
+git clone --branch feat/plugin-event-pubsub --single-branch \
+  https://github.com/fazaimron27/cliamp.git cliamp-pubsub
+cd cliamp-pubsub
+go test ./ipc ./luaplugin
+go build -o cliamp .
+install -Dm755 ./cliamp ~/.local/bin/cliamp
+cd ..
+```
+
+Close any running Cliamp process before replacing its executable, then start it
+again after installing and trusting the plugin below. Confirm that your shell
+resolves the new binary with `command -v cliamp`.
 
 ### Install the plugin
 
@@ -89,9 +129,9 @@ To review the uninstaller first, download it with `curl -fsSL -o uninstall.sh`,
 inspect it, then run `sh uninstall.sh`.
 
 The uninstaller stops and disables the user service if it is active, removes the
-daemon and unit file, and preserves the Cliamp plugin, configuration, and
-playback state. Use `--bin-dir` and `--service-dir` if you installed to custom
-locations. Continue at [Start and verify](#start-and-verify).
+daemon and unit file, and preserves the Cliamp plugin and configuration. Use
+`--bin-dir` and `--service-dir` if you installed to custom locations. Continue
+at [Start and verify](#start-and-verify).
 
 ## Self-deploy from source
 
@@ -128,8 +168,10 @@ checkout or specify the matching custom directories:
 
 Restart Cliamp after installing the Lua plugin. When you edit that file later,
 run `cliamp plugins trust discord-rpc` again to approve its new hash, then
-restart Cliamp. If the daemon reports that Cliamp rejected the subscription,
-your Cliamp build does not yet provide plugin event pub/sub.
+restart Cliamp. If startup reports `attempt to call a non-function object` for
+`publish`, or the daemon reports that Cliamp rejected `subscribe`, verify that
+you installed the linked Cliamp pub/sub branch. Otherwise use plugin release
+v1.4.0 with the official Cliamp release.
 
 ## Start and verify
 
@@ -221,6 +263,16 @@ Command-line and environment overrides are also supported; run
 - Confirm Last.fm has artwork for that artist and track.
 - Wait for the Discord asset named `cliamp` to finish processing; it is the
   fallback when Last.fm has no image.
+
+### Cliamp rejects the subscription or plugin publishing fails
+
+Version 1.5.0 requires the
+[`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
+Cliamp branch. Confirm that the running `cliamp` executable was built from that
+branch, reinstall and trust `discord-rpc.lua`, then restart Cliamp. If you want
+to stay on an official Cliamp release, install this project's
+[`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0)
+instead.
 
 ### The service fails immediately
 
