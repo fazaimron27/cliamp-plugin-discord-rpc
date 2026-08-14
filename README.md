@@ -5,6 +5,8 @@ publishes retained playback snapshots through Cliamp's in-memory IPC pub/sub
 broker, and the `cliamp-rpcd` daemon forwards them to the local Discord desktop
 client. Playback state is not written to disk.
 
+![Cliamp Discord Rich Presence](https://github.com/user-attachments/assets/f16ed6b7-052d-4bd3-b5a3-cdfc8fb64ff5)
+
 > [!NOTE]
 > This project is currently developed and tested only on Linux. Prebuilt daemon
 > releases are available for `x86_64`/`amd64` and `aarch64`/`arm64`.
@@ -202,10 +204,21 @@ you installed the linked Cliamp pub/sub branch. Otherwise follow the
 ~/.local/bin/cliamp-rpcd
 ```
 
-A playing track should appear on your Discord profile. Keep this terminal open
-while using the daemon and press `Ctrl+C` to stop it. Pausing or stopping
-playback clears the activity, and the daemon reconnects automatically if
-Discord is started or restarted later.
+A successful startup looks like this:
+
+```text
+$ cliamp-rpcd
+2026/08/14 15:29:59 starting cliamp-rpcd (Cliamp IPC: /home/faza/.config/cliamp/cliamp.sock)
+2026/08/14 15:30:14 subscribed to Cliamp playback events
+2026/08/14 15:30:18 connected to Discord at /run/user/1000/discord-ipc-0
+```
+
+The subscription line confirms the Lua plugin-to-daemon event stream. The
+Discord line confirms the local Rich Presence connection. A playing track
+should then appear on your Discord profile. Keep this terminal open while using
+the daemon and press `Ctrl+C` to stop it. Pausing or stopping playback clears
+the activity, and the daemon reconnects automatically if Discord is started or
+restarted later.
 
 Run `~/.local/bin/cliamp-rpcd --help` for all daemon options. The daemon
 subscribes to `plugin.discord-rpc.playback` on Cliamp's owner-only local IPC
