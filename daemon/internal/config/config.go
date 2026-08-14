@@ -10,24 +10,18 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
-	"time"
 )
 
-const (
-	DefaultStateMaxAge   = 45 * time.Second
-	DefaultApplicationID = "1537329890829926400"
-)
+const DefaultApplicationID = "1537329890829926400"
 
 // Config contains all runtime settings needed by the daemon.
 type Config struct {
 	ApplicationID string
-	StatePath     string
+	CliampSocket  string
 	CliampConfig  string
 	LargeImage    string
 	LargeText     string
 	LastFMAPIKey  string
-	PollInterval  time.Duration
-	StateMaxAge   time.Duration
 }
 
 // Load parses command-line arguments, then fills credentials from environment
@@ -45,12 +39,10 @@ func Load(args []string) (Config, error) {
 		writeUsage(flags)
 	}
 	flags.StringVar(&cfg.ApplicationID, "app-id", os.Getenv("CLIAMP_DISCORD_APP_ID"), "Discord application `ID` (or CLIAMP_DISCORD_APP_ID)")
-	flags.StringVar(&cfg.StatePath, "state", filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json"), "Cliamp RPC state file `path`")
+	flags.StringVar(&cfg.CliampSocket, "socket", filepath.Join(home, ".config", "cliamp", "cliamp.sock"), "Cliamp IPC socket `path`")
 	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file `path` containing Discord RPC credentials")
 	flags.StringVar(&cfg.LargeImage, "large-image", envOr("CLIAMP_DISCORD_LARGE_IMAGE", "cliamp"), "Discord application asset `key`")
 	flags.StringVar(&cfg.LargeText, "large-text", envOr("CLIAMP_DISCORD_LARGE_TEXT", "Cliamp"), "large image hover `text`")
-	flags.DurationVar(&cfg.PollInterval, "poll", 10*time.Second, "fallback state polling `duration` when filesystem watching is unavailable")
-	flags.DurationVar(&cfg.StateMaxAge, "max-age", DefaultStateMaxAge, "clear presence after state heartbeat exceeds `duration`")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -72,8 +64,8 @@ func Load(args []string) (Config, error) {
 	if cfg.ApplicationID == "" {
 		cfg.ApplicationID = DefaultApplicationID
 	}
-	if cfg.PollInterval <= 0 || cfg.StateMaxAge <= 0 {
-		return Config{}, errors.New("poll interval and max age must be positive")
+	if cfg.CliampSocket == "" {
+		return Config{}, errors.New("Cliamp socket path must not be empty")
 	}
 	return cfg, nil
 }

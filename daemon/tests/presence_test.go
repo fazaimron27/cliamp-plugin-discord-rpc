@@ -11,7 +11,7 @@ import (
 )
 
 func TestPresenceBuildsPlayingActivity(t *testing.T) {
-	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Album: "Album", Duration: 240, Position: 30, UpdatedAt: 1000}
+	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Album: "Album", Duration: 240, Position: 30, StartedAt: 970}
 	activity := presence.Build(state, presence.Options{LargeImage: "cliamp"}, "https://img/cover.jpg", time.Unix(2000, 0))
 	if activity.State != "Artist" || activity.StatusDisplayType != 1 {
 		t.Fatalf("artist display = %+v", activity)
@@ -28,7 +28,7 @@ func TestPresenceBuildsPlayingActivity(t *testing.T) {
 }
 
 func TestPresenceUsesFallbacks(t *testing.T) {
-	state := playback.State{Status: "playing", Title: "Track", Album: "Album", Duration: 10, UpdatedAt: 1000}
+	state := playback.State{Status: "playing", Title: "Track", Album: "Album", Duration: 10, StartedAt: 1000}
 	activity := presence.Build(state, presence.Options{LargeImage: "cliamp", LargeText: "Cliamp"}, "", time.Unix(1000, 0))
 	if activity.State != "Unknown artist" || activity.Assets.LargeImage != "cliamp" || activity.Assets.LargeText != "Album" {
 		t.Fatalf("activity = %+v", activity)

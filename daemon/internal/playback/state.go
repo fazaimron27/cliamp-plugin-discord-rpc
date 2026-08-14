@@ -1,109 +1,64 @@
-// Package playback reads and validates state produced by the Cliamp plugin.
+// Package playback validates playback snapshots published by the Cliamp plugin.
 package playback
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const (
-	maxStateSize       = 64 << 10
-	maxPlaybackSeconds = int64(365 * 24 * time.Hour / time.Second)
-	maxFutureSkew      = 5 * time.Minute
-)
+const maxPlaybackSeconds = int64(365 * 24 * time.Hour / time.Second)
 
-// State is the version 1 JSON contract shared with discord-rpc.lua.
+// State is the retained playback snapshot published over Cliamp IPC.
 type State struct {
-	Version   int    `json:"v"`
-	Session   string `json:"session"`
-	Sequence  int64  `json:"seq"`
-	Status    string `json:"status"`
-	Title     string `json:"title"`
-	Artist    string `json:"artist"`
-	Album     string `json:"album"`
-	Year      int    `json:"year"`
-	Duration  int64  `json:"duration"`
-	Position  int64  `json:"position"`
-	Stream    bool   `json:"stream"`
-	Heartbeat int64  `json:"heartbeat"`
-	UpdatedAt int64  `json:"updated_at"`
+	Status     string `json:"status"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	Album      string `json:"album"`
+	Path       string `json:"path"`
+	Year       int    `json:"year"`
+	Duration   int64  `json:"duration"`
+	Position   int64  `json:"position"`
+	Stream     bool   `json:"stream"`
+	ObservedAt int64  `json:"-"`
+	StartedAt  int64  `json:"-"`
 }
 
-// Read decodes and validates one plugin state document.
-func Read(path string) (State, error) {
-	file, err := openState(path)
-	if err != nil {
-		return State{}, err
-	}
-	defer file.Close()
-
-	data, err := io.ReadAll(io.LimitReader(file, maxStateSize+1))
-	if err != nil {
-		return State{}, err
-	}
-	if len(data) > maxStateSize {
-		return State{}, errors.New("state document too large")
-	}
-	var current State
-	if err := json.Unmarshal(data, &current); err != nil {
-		return State{}, err
-	}
-	if err := validate(current); err != nil {
-		return State{}, err
-	}
-	return current, nil
-}
-
-func validate(s State) error {
-	if s.Version != 1 || s.Session == "" || s.Sequence < 1 {
-		return errors.New("unsupported or incomplete state document")
-	}
-	if len(s.Session) > 256 || len(s.Status) > 32 || len(s.Title) > 4096 || len(s.Artist) > 4096 || len(s.Album) > 4096 {
-		return errors.New("state document contains oversized fields")
-	}
+// Validate rejects malformed or unreasonably large plugin payloads.
+func (s State) Validate() error {
 	if s.Status != "playing" && s.Status != "paused" && s.Status != "stopped" {
-		return errors.New("state document contains an invalid status")
+		return errors.New("playback snapshot contains an invalid status")
 	}
-	if s.Duration < 0 || s.Duration > maxPlaybackSeconds || s.Position < 0 || s.Position > maxPlaybackSeconds || s.Year < 0 || s.Year > 9999 || s.Heartbeat <= 0 || s.UpdatedAt <= 0 {
-		return errors.New("state document contains invalid numeric fields")
+	if len(s.Status) > 32 || len(s.Title) > 4096 || len(s.Artist) > 4096 || len(s.Album) > 4096 || len(s.Path) > 16384 {
+		return errors.New("playback snapshot contains oversized fields")
 	}
-	latest := time.Now().Add(maxFutureSkew)
-	if time.Unix(s.Heartbeat, 0).After(latest) || time.Unix(s.UpdatedAt, 0).After(latest) {
-		return errors.New("state timestamps are too far in the future")
+	if strings.ContainsRune(s.Title, 0) || strings.ContainsRune(s.Artist, 0) || strings.ContainsRune(s.Album, 0) || strings.ContainsRune(s.Path, 0) {
+		return errors.New("playback snapshot contains invalid text")
+	}
+	if s.Duration < 0 || s.Duration > maxPlaybackSeconds || s.Position < 0 || s.Position > maxPlaybackSeconds || s.Year < 0 || s.Year > 9999 {
+		return errors.New("playback snapshot contains invalid numeric fields")
 	}
 	return nil
 }
 
-// Revision uniquely identifies a write. Sequence alone is insufficient because
-// the Lua plugin resets it whenever Cliamp starts a new session.
-func (s State) Revision() string {
-	return s.Session + ":" + strconv.FormatInt(s.Sequence, 10)
+// IsPlaying reports whether the snapshot should currently be visible.
+func (s State) IsPlaying() bool {
+	return s.Status == "playing" && strings.TrimSpace(s.Title) != ""
 }
 
-// IsPlaying reports whether state should currently be visible on Discord.
-// Paused playback is hidden because Discord cannot freeze activity timestamps.
-func (s State) IsPlaying(maxAge time.Duration, now time.Time) bool {
-	if s.Status != "playing" || strings.TrimSpace(s.Title) == "" || s.Heartbeat <= 0 {
-		return false
-	}
-	age := now.Sub(time.Unix(s.Heartbeat, 0))
-	return age <= maxAge
+// TrackKey identifies the source track without exposing its path to Discord.
+func (s State) TrackKey() string {
+	return strings.Join([]string{s.Path, s.Title, s.Artist, s.Album, strconv.FormatInt(s.Duration, 10)}, "\x00")
 }
 
-// PresenceKey contains only values that can change the Discord activity.
-// Heartbeat and sequence are intentionally excluded, making liveness-only
-// writes free while still allowing stale state to clear at evaluation time.
-func (s State) PresenceKey(maxAge time.Duration, now time.Time) string {
-	if !s.IsPlaying(maxAge, now) {
+// PresenceKey contains only values that affect the Discord activity.
+func (s State) PresenceKey() string {
+	if !s.IsPlaying() {
 		return "clear"
 	}
 	return strings.Join([]string{
 		s.Status, s.Title, s.Artist, s.Album,
-		strconv.FormatInt(s.Duration, 10), strconv.FormatInt(s.Position, 10),
-		strconv.FormatInt(s.UpdatedAt, 10),
+		strconv.FormatInt(s.Duration, 10), strconv.FormatInt(s.StartedAt, 10),
 	}, "\x00")
 }

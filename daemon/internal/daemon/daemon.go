@@ -1,25 +1,20 @@
-// Package daemon coordinates state notifications, artwork lookup, and Discord IPC.
+// Package daemon coordinates Cliamp event subscriptions, artwork, and Discord IPC.
 package daemon
 
 import (
 	"context"
-	"errors"
 	"log"
-	"os"
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
+	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
-	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
 )
 
-const (
-	presenceRefresh = 15 * time.Second
-	readRetryDelay  = 10 * time.Millisecond
-)
+const presenceRefresh = 15 * time.Second
 
 type discordClient interface {
 	Connected() bool
@@ -33,76 +28,70 @@ type artworkResolver interface {
 	Resolve(context.Context, string, string) (string, error)
 }
 
-// Run constructs production dependencies and blocks until context cancellation.
+type timelineTracker struct {
+	last    playback.State
+	have    bool
+	nowUnix func() int64
+}
+
+func (t *timelineTracker) Accept(state playback.State) playback.State {
+	observed := state.ObservedAt
+	if observed <= 0 {
+		if t.nowUnix != nil {
+			observed = t.nowUnix()
+		} else {
+			observed = time.Now().Unix()
+		}
+	}
+	state.ObservedAt = observed
+	if state.IsPlaying() {
+		keepTimeline := t.have && t.last.IsPlaying() && state.TrackKey() == t.last.TrackKey()
+		if keepTimeline {
+			expected := t.last.Position + max(observed-t.last.ObservedAt, 0)
+			delta := state.Position - expected
+			if delta < 0 {
+				delta = -delta
+			}
+			keepTimeline = delta <= 2
+		}
+		if keepTimeline {
+			state.StartedAt = t.last.StartedAt
+		} else {
+			state.StartedAt = observed - min(max(state.Position, 0), state.Duration)
+		}
+	}
+	t.last = state
+	t.have = true
+	return state
+}
+
+// Run constructs production dependencies and blocks until cancellation.
 func Run(ctx context.Context, cfg config.Config) error {
-	log.Printf("starting cliamp-rpcd (state: %s)", cfg.StatePath)
+	log.Printf("starting cliamp-rpcd (Cliamp IPC: %s)", cfg.CliampSocket)
 	if cfg.LastFMAPIKey == "" {
 		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
-	client := discord.NewClient(cfg.ApplicationID)
-	resolver := artwork.NewLastFM(cfg.LastFMAPIKey)
-	return run(ctx, cfg, client, resolver, time.Now)
+	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.NewLastFM(cfg.LastFMAPIKey), time.Now)
 }
 
 func run(ctx context.Context, cfg config.Config, client discordClient, resolver artworkResolver, now func() time.Time) error {
 	defer client.Close()
 
-	var watcher *statewatch.Watcher
-	openWatcher := func() {
-		if watcher != nil {
-			return
-		}
-		candidate, err := statewatch.New(cfg.StatePath)
-		if err != nil {
-			return
-		}
-		watcher = candidate
-		log.Printf("watching playback state directory")
-	}
-	openWatcher()
-
-	var lastRevision string
-	var publishedKey string
-	var publishedAt time.Time
+	var states <-chan playback.State
 	var lastState playback.State
 	var haveState bool
-	var reconnectDelay = time.Second
+	tracker := timelineTracker{nowUnix: func() int64 { return now().Unix() }}
+	var publishedKey string
+	var publishedAt time.Time
+	reconnectDelay := time.Second
 
-	readState := func() (playback.State, error) {
-		var err error
-		for _, delay := range []time.Duration{0, readRetryDelay, 25 * time.Millisecond, 50 * time.Millisecond} {
-			if delay > 0 {
-				time.Sleep(delay)
-			}
-			state, readErr := playback.Read(cfg.StatePath)
-			if readErr == nil {
-				return state, nil
-			}
-			err = readErr
-		}
-		return playback.State{}, err
-	}
-
-	staleTimer := time.NewTimer(time.Hour)
-	if !staleTimer.Stop() {
-		<-staleTimer.C
-	}
 	refreshTimer := time.NewTimer(time.Hour)
 	if !refreshTimer.Stop() {
 		<-refreshTimer.C
 	}
-	reconnectTimer := time.NewTimer(time.Hour)
-	if !reconnectTimer.Stop() {
-		<-reconnectTimer.C
-	}
-	fallbackTimer := time.NewTimer(time.Hour)
-	if !fallbackTimer.Stop() {
-		<-fallbackTimer.C
-	}
-	defer staleTimer.Stop()
+	cliampTimer := time.NewTimer(0)
 	defer refreshTimer.Stop()
-	defer reconnectTimer.Stop()
-	defer fallbackTimer.Stop()
+	defer cliampTimer.Stop()
 
 	reset := func(timer *time.Timer, duration time.Duration) {
 		if !timer.Stop() {
@@ -116,147 +105,86 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		}
 	}
 
-	scheduleFallback := func() {
-		if watcher == nil {
-			reset(fallbackTimer, cfg.PollInterval)
-		} else {
-			reset(fallbackTimer, 0)
+	clear := func() {
+		reset(refreshTimer, 0)
+		if client.Connected() && publishedKey != "clear" {
+			if err := client.ClearActivity(); err != nil {
+				log.Printf("clear Discord presence: %v", err)
+				_ = client.Close()
+			}
 		}
+		publishedKey = "clear"
+		publishedAt = now()
 	}
 
 	reconcile := func() {
-		currentTime := now()
-		if !haveState {
+		if !haveState || !lastState.IsPlaying() {
+			clear()
 			return
 		}
-		if !lastState.IsPlaying(cfg.StateMaxAge, currentTime) {
-			if publishedKey != "clear" && client.Connected() {
-				if err := client.ClearActivity(); err != nil {
-					log.Printf("clear Discord presence: %v", err)
-					_ = client.Close()
-				} else {
-					publishedKey = "clear"
-					publishedAt = currentTime
-				}
-			} else if !client.Connected() {
-				publishedKey = "clear"
-			}
-			reset(refreshTimer, 0)
-			reset(reconnectTimer, 0)
-			reconnectDelay = time.Second
-			return
-		}
-
-		image := ""
-		var err error
-		image, err = resolver.Resolve(ctx, lastState.Artist, lastState.Title)
+		image, err := resolver.Resolve(ctx, lastState.Artist, lastState.Title)
 		if err != nil {
 			log.Printf("resolve Last.fm artwork: %v", err)
 		}
-		desiredKey := lastState.PresenceKey(cfg.StateMaxAge, currentTime) + "\x00" + image
+		currentTime := now()
+		desiredKey := lastState.PresenceKey() + "\x00" + image
 		if desiredKey == publishedKey && client.Connected() && currentTime.Sub(publishedAt) < presenceRefresh {
-			reset(reconnectTimer, 0)
 			reset(refreshTimer, presenceRefresh-currentTime.Sub(publishedAt))
 			return
 		}
 		if err := client.Connect(ctx); err != nil {
-			reset(reconnectTimer, reconnectDelay)
-			reconnectDelay = min(2*reconnectDelay, 15*time.Second)
+			reset(refreshTimer, time.Second)
 			return
 		}
 		activity := presence.Build(lastState, presence.Options{LargeImage: cfg.LargeImage, LargeText: cfg.LargeText}, image, currentTime)
 		if err := client.SetActivity(activity); err != nil {
 			log.Printf("update Discord presence: %v", err)
 			_ = client.Close()
-			reset(reconnectTimer, reconnectDelay)
-			reconnectDelay = min(2*reconnectDelay, 15*time.Second)
+			reset(refreshTimer, time.Second)
 			return
 		}
 		publishedKey = desiredKey
 		publishedAt = currentTime
-		reconnectDelay = time.Second
-		reset(reconnectTimer, 0)
 		reset(refreshTimer, presenceRefresh)
 	}
 
 	accept := func(state playback.State) {
-		if haveState && state.Revision() == lastRevision {
-			return
-		}
-		lastState = state
-		lastRevision = state.Revision()
+		lastState = tracker.Accept(state)
 		haveState = true
-		reconnectDelay = time.Second
-		reset(staleTimer, time.Unix(state.Heartbeat, 0).Add(cfg.StateMaxAge).Sub(now()))
 		reconcile()
 	}
 
-	readAndReconcile := func() {
-		state, err := readState()
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				log.Printf("read state: %v", err)
-			}
-			return
-		}
-		accept(state)
-	}
-
-	readAndReconcile()
-	scheduleFallback()
 	for {
-		var events <-chan struct{}
-		var watcherErrors <-chan error
-		if watcher != nil {
-			events = watcher.Events()
-			watcherErrors = watcher.Errors()
-		}
 		select {
 		case <-ctx.Done():
-			if client.Connected() {
-				_ = client.ClearActivity()
-			}
-			if watcher != nil {
-				_ = watcher.Close()
-			}
+			clear()
 			return nil
-		case _, ok := <-events:
-			if !ok {
-				if watcher != nil {
-					_ = watcher.Close()
-					watcher = nil
+		case <-cliampTimer.C:
+			stream, err := cliampipc.Subscribe(ctx, cfg.CliampSocket)
+			if err != nil {
+				if ctx.Err() != nil {
+					clear()
+					return nil
 				}
-				scheduleFallback()
+				reset(cliampTimer, reconnectDelay)
+				reconnectDelay = min(2*reconnectDelay, 15*time.Second)
 				continue
 			}
-			readAndReconcile()
-		case _, ok := <-watcherErrors:
+			states = stream
+			reconnectDelay = time.Second
+			log.Printf("subscribed to Cliamp playback events")
+		case state, ok := <-states:
 			if !ok {
-				if watcher != nil {
-					_ = watcher.Close()
-					watcher = nil
-				}
-				scheduleFallback()
+				states = nil
+				haveState = false
+				clear()
+				reset(cliampTimer, reconnectDelay)
+				reconnectDelay = min(2*reconnectDelay, 15*time.Second)
+				log.Printf("Cliamp event stream disconnected; reconnecting")
 				continue
 			}
-			if watcher != nil {
-				_ = watcher.Close()
-				watcher = nil
-			}
-			readAndReconcile()
-			scheduleFallback()
-			log.Printf("state watcher failed; using fallback polling")
-		case <-fallbackTimer.C:
-			if watcher == nil {
-				openWatcher()
-				readAndReconcile()
-				scheduleFallback()
-			}
-		case <-staleTimer.C:
-			reconcile()
+			accept(state)
 		case <-refreshTimer.C:
-			reconcile()
-		case <-reconnectTimer.C:
 			reconcile()
 		}
 	}

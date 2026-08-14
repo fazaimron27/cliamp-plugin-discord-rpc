@@ -55,8 +55,9 @@ type Button struct {
 	URL   string `json:"url"`
 }
 
-// Build creates a Listening activity. Timestamp anchors come from the state
-// document so heartbeat-only writes do not restart the progress bar.
+// Build creates a Listening activity. StartedAt is derived from the plugin
+// event timestamp and playback position, so ordinary snapshots preserve the
+// progress timeline while seeks and resumes establish a new anchor.
 func Build(s playback.State, options Options, artworkURL string, now time.Time) *Activity {
 	artist := s.Artist
 	if strings.TrimSpace(artist) == "" {
@@ -81,9 +82,9 @@ func Build(s playback.State, options Options, artworkURL string, now time.Time) 
 	}
 
 	if s.Status == "playing" && s.Duration > 0 {
-		position := min(max(s.Position, 0), s.Duration)
-		start := s.UpdatedAt - position
+		start := s.StartedAt
 		if start <= 0 {
+			position := min(max(s.Position, 0), s.Duration)
 			start = now.Unix() - position
 		}
 		activity.Timestamps = &Timestamps{Start: start, End: start + s.Duration}

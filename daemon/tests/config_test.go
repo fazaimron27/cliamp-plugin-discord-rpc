@@ -100,7 +100,7 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 
 	help := string(output)
-	for _, option := range []string{"--app-id", "--config", "--large-image", "--large-text", "--max-age", "--poll", "--state"} {
+	for _, option := range []string{"--app-id", "--config", "--large-image", "--large-text", "--socket"} {
 		if !strings.Contains(help, option) {
 			t.Errorf("help does not contain %q:\n%s", option, help)
 		}
