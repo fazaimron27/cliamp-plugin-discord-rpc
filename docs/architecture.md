@@ -1,16 +1,17 @@
 # Architecture
 
 Cliamp Discord RPC is split into a sandboxed Lua plugin and a native Go daemon.
-The split is required by Cliamp's security model: the plugin can observe player
-events and write allowlisted files, but only the daemon can keep a connection to
-Discord's local IPC socket and call Last.fm.
+The plugin observes playback events and publishes local messages; the daemon
+owns Discord IPC and optional Last.fm requests.
 
 ## Data Flow
 
 ```text
 Cliamp events
   -> discord-rpc.lua
-  -> ~/.local/share/cliamp/rpc-state.json
+  -> p:publish("playback", snapshot, {retain = true})
+  -> Cliamp in-memory event broker
+  -> ~/.config/cliamp/cliamp.sock subscription
   -> cliamp-rpcd
        -> Last.fm track.getInfo
        -> Discord SET_ACTIVITY
@@ -19,29 +20,29 @@ Cliamp events
 The root-level `discord-rpc.lua` file is also the repository entrypoint required
 by Cliamp's `cliamp-plugin-<name>` install-source convention.
 
-## State Contract
+## Pub/Sub Contract
 
-The Lua plugin maintains a complete in-memory playback snapshot and writes JSON
-schema version 1 after relevant events. The daemon watches the state directory
-and reads the latest snapshot when the file changes; it does not poll during
-normal operation. Important fields are:
+The plugin publishes the exact topic `plugin.discord-rpc.playback`. Cliamp
+constructs that namespace from the installed plugin filename, so Lua code cannot
+impersonate another plugin. Each payload is a complete playback snapshot:
 
-- `session` identifies one plugin load.
-- `seq` increases for every write within a session.
-- `status` is `playing`, `paused`, or `stopped`.
-- `position` and `duration` are whole seconds.
-- `updated_at` changes for playback changes and anchors Discord timestamps.
-- `heartbeat` changes every 15 seconds and only proves plugin liveness.
+- `status`: `playing`, `paused`, or `stopped`
+- `title`, `artist`, and `album`
+- `year`
+- `duration` and `position` in whole seconds
+- `stream`
+- `path`, used only as private local track identity
 
-The daemon combines `session` and `seq` to identify writes. Presence identity
-excludes `heartbeat`, so heartbeat-only writes do not reset Discord's timeline.
-Playback paths are used only in the plugin's in-memory transition logic and are
-not persisted, sent to Discord, or included in Last.fm requests.
+The event is retained in Cliamp memory. A daemon that starts after playback has
+begun receives the newest snapshot immediately. Retention is process-local and
+is never written to disk.
+
+Cliamp assigns a process-local event sequence and timestamp. The daemon uses the
+event timestamp and playback position to derive Discord's timeline. Snapshots
+whose positions match natural progression preserve the timeline; a track
+change, resume, or position jump creates a new anchor.
 
 ## Repository Layout
-
-The native application is grouped under `daemon/`, while the Cliamp plugin
-entrypoint remains at the repository root:
 
 ```text
 cliamp-plugin-discord-rpc/
@@ -49,6 +50,7 @@ cliamp-plugin-discord-rpc/
 │   ├── cmd/cliamp-rpcd/
 │   └── internal/
 │       ├── artwork/
+│       ├── cliamp/
 │       ├── config/
 │       ├── daemon/
 │       ├── discord/
@@ -62,55 +64,53 @@ cliamp-plugin-discord-rpc/
 └── go.mod
 ```
 
-All tests live in `daemon/tests/` and exercise package APIs from outside their
-implementation directories. This keeps production and test files physically
-separate while retaining Go's `internal` import protection: code beneath
-`daemon/` is allowed to import `daemon/internal/...` packages.
-
 ## Go Packages
 
-- `daemon/cmd/cliamp-rpcd` handles process startup and operating-system signals.
+- `daemon/cmd/cliamp-rpcd` handles startup and operating-system signals.
 - `daemon/internal/config` loads flags, environment overrides, and
-  `[plugins.discord-rpc]` from Cliamp's TOML config. The community-maintained
-  Discord application ID is the final fallback, while Last.fm artwork is
-  disabled when no API key is configured.
-- `daemon/internal/playback` validates state documents and defines visibility rules.
-- `daemon/internal/presence` builds typed Discord Listening activity payloads.
+  `[plugins.discord-rpc]` from Cliamp's TOML config.
+- `daemon/internal/cliamp` subscribes to retained and live plugin events over
+  Cliamp's owner-only Unix socket.
+- `daemon/internal/playback` validates snapshots and derives private identity
+  and public presence keys.
+- `daemon/internal/presence` builds typed Discord Listening activities.
 - `daemon/internal/artwork` resolves and caches album images from Last.fm.
-- `daemon/internal/discord` implements socket discovery, framing, handshake, and
-  `SET_ACTIVITY` over Discord IPC.
-- `daemon/internal/statewatch` watches the state directory and coalesces file notifications.
-- `daemon/internal/daemon` reacts to state notifications and coordinates the other packages.
+- `daemon/internal/discord` implements socket discovery, framing, handshake,
+  and `SET_ACTIVITY` over Discord IPC.
+- `daemon/internal/daemon` coordinates subscriptions, artwork, timelines,
+  reconnects, refreshes, and activity clearing.
 
 ## Playback Behavior
 
 Playing tracks publish a Listening activity with title, artist, artwork, and a
 client-rendered progress timeline. Paused and stopped playback clear the card.
-Discord cannot freeze an activity timer, so clearing on pause is the only
-reliable Spotify-like behavior. Resuming publishes a new activity anchored to
-the saved playback position.
+Discord cannot freeze an activity timer, so clearing on pause is the reliable
+Spotify-like behavior. Resuming publishes a new timeline anchored to the saved
+position.
 
-If the heartbeat exceeds the configured maximum age, the daemon treats the
-state as stale and clears the activity. This handles an unclean Cliamp exit.
+A subscription disconnect clears activity immediately. This handles clean and
+unclean Cliamp exits without heartbeat expiry. The daemon reconnects with
+bounded backoff and receives retained state when Cliamp is available again.
 
 ## Artwork
 
 The daemon calls Last.fm `track.getInfo` with artist and title, selects the
 largest valid HTTPS image, and caches both hits and misses for its lifetime. A
 missing API key, failed lookup, or absent image falls back to the Discord
-application asset configured by `-large-image`.
+application asset configured by `--large-image`.
 
 The community-maintained default Discord application ID is used unless a custom
 ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
 `plugins.discord-rpc.app_id`. Last.fm artwork is enabled only when a
-`lastfm_api_key` is supplied; otherwise the static application asset is used.
+`lastfm_api_key` is supplied.
 
 ## Failure Handling
 
-Discord connection failures leave the daemon running. A dedicated retry timer
-reconnects with bounded backoff, even when playback state does not change. A
-failed activity update closes the current connection so the next retry starts
-cleanly. Presence refresh and stale-heartbeat handling use independent timers.
-If filesystem watching is unavailable, the daemon temporarily uses slow
-fallback polling and retries the watcher. On SIGINT or SIGTERM, the daemon
-clears the activity before closing the IPC socket.
+Discord connection failures leave the daemon running. Presence refresh retries
+reconnect even when playback state does not change. Failed activity updates
+close the current Discord connection so the next attempt starts cleanly.
+
+Cliamp subscription failures also leave the daemon running. It reconnects with
+bounded backoff, clears stale Discord activity when the stream closes, and gets
+the retained snapshot after reconnecting. On SIGINT or SIGTERM, the daemon
+clears activity before closing Discord IPC.

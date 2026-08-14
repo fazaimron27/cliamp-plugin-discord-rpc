@@ -1,8 +1,9 @@
 # Cliamp Discord RPC Plugin
 
 Discord Rich Presence for [Cliamp](https://www.cliamp.stream/). The Lua plugin
-writes the current playback state to disk, and the `cliamp-rpcd` daemon sends it
-to the local Discord desktop client.
+publishes retained playback snapshots through Cliamp's in-memory IPC pub/sub
+broker, and the `cliamp-rpcd` daemon forwards them to the local Discord desktop
+client. Playback state is not written to disk.
 
 > [!NOTE]
 > This project is currently developed and tested only on Linux. Prebuilt daemon
@@ -12,7 +13,8 @@ to the local Discord desktop client.
 
 Before installing, make sure you have:
 
-- Cliamp installed and available as `cliamp`.
+- Cliamp with plugin event pub/sub support. Until that support is included in
+  an official release, build and install a compatible Cliamp checkout first.
 - The Discord desktop client. Discord in a web browser does not expose the local
   IPC socket used by Rich Presence.
 - A Discord account signed in to the desktop client.
@@ -30,7 +32,7 @@ enhancement.
 ## Install from release
 
 Use this path for a normal installation on `amd64` or `arm64`. It installs the
-plugin through Cliamp and downloads the published `v1.4.0` daemon; Go is not
+plugin through Cliamp and downloads the published `v1.5.0` daemon; Go is not
 required.
 
 ### Install the plugin
@@ -64,7 +66,7 @@ The installer:
 
 - Detects `amd64` or `arm64`.
 - Downloads the matching archive from the
-  [v1.4.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0).
+  [v1.5.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.5.0).
 - Verifies the archive's GitHub Actions provenance attestation, bound to this repository's release workflow.
 - Verifies the archive against the published SHA-256 checksum.
 - Installs `cliamp-rpcd` to `~/.local/bin`.
@@ -126,7 +128,8 @@ checkout or specify the matching custom directories:
 
 Restart Cliamp after installing the Lua plugin. When you edit that file later,
 run `cliamp plugins trust discord-rpc` again to approve its new hash, then
-restart Cliamp.
+restart Cliamp. If the daemon reports that Cliamp rejected the subscription,
+your Cliamp build does not yet provide plugin event pub/sub.
 
 ## Start and verify
 
@@ -143,9 +146,9 @@ while using the daemon and press `Ctrl+C` to stop it. Pausing or stopping
 playback clears the activity, and the daemon reconnects automatically if
 Discord is started or restarted later.
 
-Run `~/.local/bin/cliamp-rpcd --help` for all daemon options. `--poll` controls
-the fallback state polling interval used only when filesystem watching is
-unavailable; normal operation is event-driven.
+Run `~/.local/bin/cliamp-rpcd --help` for all daemon options. The daemon
+subscribes to `plugin.discord-rpc.playback` on Cliamp's owner-only local IPC
+socket and reconnects automatically when Cliamp restarts.
 
 ### Optional systemd user service
 
@@ -233,14 +236,18 @@ Last.fm API key is optional and artwork lookup is disabled when it is empty.
 
 ## How it works
 
-The plugin writes playback state to
-`~/.local/share/cliamp/rpc-state.json`. The daemon watches that file's parent
-directory and reads the latest snapshot when cliamp writes it. It then resolves
-optional album artwork through Last.fm and updates Discord through its local
-IPC socket. Separate timers handle heartbeat expiry, Discord reconnects, and
-presence refreshes. If filesystem notifications are unavailable, `--poll`
-provides a slow fallback interval. Heartbeats clear stale activity after an
-unclean Cliamp exit.
+The plugin publishes a complete playback snapshot to the retained
+`plugin.discord-rpc.playback` topic whenever Cliamp starts, changes track,
+changes playback state, seeks, or quits. Cliamp keeps only the latest snapshot
+in memory and immediately replays it to a newly connected daemon. The daemon
+resolves optional album artwork through Last.fm and updates Discord through its
+local IPC socket.
+
+The subscription connection is also the liveness signal. Pausing or stopping
+clears activity; an unclean Cliamp exit closes the stream and clears activity
+immediately. The daemon reconnects with bounded backoff and receives the latest
+retained snapshot after Cliamp returns. No playback state file, filesystem
+watcher, heartbeat, or polling loop is used.
 
 See [Architecture](docs/architecture.md) for the state contract, package
 responsibilities, artwork flow, and failure behavior.
