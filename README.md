@@ -13,32 +13,35 @@ client. Playback state is not written to disk.
 
 ## Compatibility
 
-The current `v1.5.0` release requires Cliamp's plugin event pub/sub API, which
-is not yet part of an official Cliamp release. Use one of these combinations:
+The current `v1.5.0` release requires Cliamp's plugin event pub/sub API, now merged to
+Cliamp's official `main` branch in
+[`f373776d`](https://github.com/bjarneo/cliamp/commit/f373776d). The latest tagged
+Cliamp release may predate that merge, so use one of these combinations:
 
-- **Fileless v1.5.0:** build and install the
-  [`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
-  Cliamp branch, then install this project's `v1.5.0` plugin and daemon.
-- **Official Cliamp releases:** use this project's legacy
+- **v1.5.0 with Cliamp main:** build Cliamp from the official
+  [`main`](https://github.com/bjarneo/cliamp/tree/main) branch, then install this
+  project's `v1.5.0` plugin and daemon.
+- **Older official Cliamp releases:** use this project's legacy
   [`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0),
   which transports playback through `rpc-state.json` and does not require the
-  pub/sub API. Follow the [pinned v1.4.0 installation](#legacy-v140-for-official-cliamp-releases)
+  pub/sub API. Follow the [pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases)
   below.
 
 The Lua plugin and daemon must use the same release line: pair v1.5.0 with
-v1.5.0, or v1.4.0 with v1.4.0. The transports are intentionally incompatible.
-Do not install the v1.5.0 Lua plugin into an official Cliamp build that lacks
-`p:publish()`; its event handlers will fail when they try to publish, and no
-playback events will reach the daemon.
+Cliamp main, or v1.4.0 with an older official Cliamp release. The transports are
+intentionally incompatible. Do not install the v1.5.0 Lua plugin into a Cliamp
+build that lacks `p:publish()`; its event handlers will fail when they try to
+publish, and no playback events will reach the daemon.
 
 ## Prerequisites
 
 Before installing v1.5.0, make sure you have:
 
-- Git and Go 1.26.5 or newer to build the temporary Cliamp branch.
-- Cliamp built from the
-  [`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
-  branch and available as `cliamp`.
+- Git and Go 1.26.5 or newer to build Cliamp from its official `main` branch.
+- Cliamp built from the official
+  [`main`](https://github.com/bjarneo/cliamp/tree/main) branch and available as
+  `cliamp`. The branch must include the
+  [retained plugin event pub/sub merge](https://github.com/bjarneo/cliamp/commit/f373776d).
 - The Discord desktop client. Discord in a web browser does not expose the local
   IPC socket used by Rich Presence.
 - A Discord account signed in to the desktop client.
@@ -56,19 +59,18 @@ enhancement.
 ## Install v1.5.0 from release
 
 Use this path for a normal v1.5.0 installation on `amd64` or `arm64` after
-installing the compatible Cliamp pub/sub branch. It installs the plugin through
-Cliamp and downloads the published `v1.5.0` daemon; Go is not required for the
-plugin or daemon.
+installing Cliamp from its official `main` branch. It installs the plugin
+through Cliamp and downloads the published `v1.5.0` daemon; Go is not required
+for the plugin or daemon.
 
-### Build the compatible Cliamp branch
+### Build Cliamp main
 
-Until plugin pub/sub reaches an official Cliamp release, build and install the
-linked branch before installing v1.5.0:
+Build and install the official branch containing the merged plugin pub/sub API:
 
 ```sh
-git clone --branch feat/plugin-event-pubsub --single-branch \
-  https://github.com/fazaimron27/cliamp.git cliamp-pubsub
-cd cliamp-pubsub
+git clone --branch main --single-branch \
+  https://github.com/bjarneo/cliamp.git cliamp-main
+cd cliamp-main
 go test ./ipc ./luaplugin
 go build -o cliamp .
 install -Dm755 ./cliamp ~/.local/bin/cliamp
@@ -137,7 +139,7 @@ daemon and unit file, and preserves the Cliamp plugin and configuration. Use
 `--bin-dir` and `--service-dir` if you installed to custom locations. Continue
 at [Start and verify](#start-and-verify).
 
-## Legacy v1.4.0 for official Cliamp releases
+## Legacy v1.4.0 for older Cliamp releases
 
 If you want to keep an official Cliamp build without plugin pub/sub, pin both
 parts of this project to v1.4.0:
@@ -191,8 +193,9 @@ Restart Cliamp after installing the Lua plugin. When you edit that file later,
 run `cliamp plugins trust discord-rpc` again to approve its new hash, then
 restart Cliamp. If startup reports `attempt to call a non-function object` for
 `publish`, or the daemon reports that Cliamp rejected `subscribe`, verify that
-you installed the linked Cliamp pub/sub branch. Otherwise follow the
-[pinned v1.4.0 installation](#legacy-v140-for-official-cliamp-releases).
+you installed a Cliamp build from the official `main` branch after the retained
+pub/sub merge. Otherwise follow the
+[pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases).
 
 ## Start and verify
 
@@ -298,13 +301,13 @@ Command-line and environment overrides are also supported; run
 
 ### Cliamp rejects the subscription or plugin publishing fails
 
-Version 1.5.0 requires the
-[`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
-Cliamp branch. Confirm that the running `cliamp` executable was built from that
-branch, reinstall and trust `discord-rpc.lua`, then restart Cliamp. If you want
-to stay on an official Cliamp release, follow the
-[pinned v1.4.0 installation](#legacy-v140-for-official-cliamp-releases)
-instead.
+Version 1.5.0 requires Cliamp's retained plugin event pub/sub API, which is now
+on the official [`main`](https://github.com/bjarneo/cliamp/tree/main) branch.
+Confirm that the running `cliamp` executable was built from that branch after
+commit [`f373776d`](https://github.com/bjarneo/cliamp/commit/f373776d), then
+reinstall and trust `discord-rpc.lua` and restart Cliamp. If you want to stay on
+an older tagged Cliamp release, follow the
+[pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases) instead.
 
 ### The service fails immediately
 

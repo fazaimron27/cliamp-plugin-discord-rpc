@@ -19,10 +19,10 @@ Cliamp events
 
 The root-level `discord-rpc.lua` file is also the repository entrypoint required
 by Cliamp's `cliamp-plugin-<name>` install-source convention. This transport
-requires the temporary
-[`feat/plugin-event-pubsub`](https://github.com/fazaimron27/cliamp/tree/feat/plugin-event-pubsub)
-Cliamp branch until the API is available in an official release. Plugin release
-v1.4.0 remains compatible with official Cliamp releases by using the former
+requires the retained plugin event pub/sub API merged into Cliamp's official
+`main` branch in
+[`f373776d`](https://github.com/bjarneo/cliamp/commit/f373776d). Plugin release
+v1.4.0 remains compatible with older Cliamp releases by using the former
 state-file transport.
 
 ## Pub/Sub Contract
