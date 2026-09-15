@@ -15,9 +15,34 @@ import (
 
 const PlaybackTopic = "plugin.discord-rpc.playback"
 
+// protocolVersion is the mandatory Cliamp IPC envelope version. Cliamp rejects
+// unversioned frames with a structured invalid_version error, so this constant
+// must track Cliamp's docs/upgrading-ipc-v2.md.
+const protocolVersion = 2
+
+// subscriptionID identifies this request so a mismatched acknowledgment is
+// reported rather than accepted as the answer to a different request.
+const subscriptionID = "discord-rpc-subscribe"
+
+type subscriptionRequest struct {
+	Version int      `json:"version"`
+	ID      string   `json:"id"`
+	Method  string   `json:"method"`
+	Topics  []string `json:"topics"`
+}
+
+// rpcError mirrors Cliamp's v2 error object. It is a struct rather than a
+// string because v2 reports failures as an object, not a bare message.
+type rpcError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type response struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	Version int       `json:"version"`
+	ID      string    `json:"id,omitempty"`
+	OK      bool      `json:"ok"`
+	Error   *rpcError `json:"error,omitempty"`
 }
 
 type event struct {
@@ -39,9 +64,11 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, e
 		return nil, err
 	}
 
-	request, err := json.Marshal(map[string]any{
-		"cmd":    "subscribe",
-		"topics": []string{PlaybackTopic},
+	request, err := json.Marshal(subscriptionRequest{
+		Version: protocolVersion,
+		ID:      subscriptionID,
+		Method:  "subscribe",
+		Topics:  []string{PlaybackTopic},
 	})
 	if err != nil {
 		return fail(fmt.Errorf("encode Cliamp subscription: %w", err))
@@ -64,8 +91,17 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, e
 	if err := json.Unmarshal(scanner.Bytes(), &ack); err != nil {
 		return fail(fmt.Errorf("decode Cliamp subscription response: %w", err))
 	}
+	if ack.Version != protocolVersion {
+		return fail(fmt.Errorf("Cliamp IPC response version %d, want %d", ack.Version, protocolVersion))
+	}
+	if ack.ID != "" && ack.ID != subscriptionID {
+		return fail(fmt.Errorf("Cliamp subscription response ID %q, want %q", ack.ID, subscriptionID))
+	}
 	if !ack.OK {
-		return fail(fmt.Errorf("Cliamp rejected subscription: %s", ack.Error))
+		if ack.Error == nil {
+			return fail(errors.New("Cliamp rejected subscription without an error"))
+		}
+		return fail(fmt.Errorf("Cliamp rejected subscription: %s: %s", ack.Error.Code, ack.Error.Message))
 	}
 	_ = conn.SetDeadline(time.Time{})
 

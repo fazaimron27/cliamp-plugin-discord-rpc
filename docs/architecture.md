@@ -38,6 +38,12 @@ impersonate another plugin. Each payload is a complete playback snapshot:
 - `stream`
 - `path`, used only as private local track identity
 
+The subscription request must carry Cliamp's version 2 IPC envelope. Cliamp
+rejects an unversioned frame with a structured `invalid_version` error instead
+of interpreting it, so the daemon sends
+`{"version":2,"id":...,"method":"subscribe","topics":[...]}` and validates the
+acknowledged version and error object. See Cliamp's `docs/upgrading-ipc-v2.md`.
+
 The event is retained in Cliamp memory. A daemon that starts after playback has
 begun receives the newest snapshot immediately. Retention is process-local and
 is never written to disk.

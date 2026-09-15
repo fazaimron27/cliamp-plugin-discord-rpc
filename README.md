@@ -13,35 +13,38 @@ client. Playback state is not written to disk.
 
 ## Compatibility
 
-The current `v1.5.0` release requires Cliamp's plugin event pub/sub API, now merged to
-Cliamp's official `main` branch in
-[`f373776d`](https://github.com/bjarneo/cliamp/commit/f373776d). The latest tagged
-Cliamp release may predate that merge, so use one of these combinations:
+The current `v1.6.0` release requires a Cliamp build that speaks IPC protocol
+version 2 and exposes the plugin event pub/sub API. Cliamp made version 2
+mandatory for its socket, so an older build answers the daemon's subscription
+with a structured `invalid_version` error. Use one of these combinations:
 
-- **v1.5.0 with Cliamp main:** build Cliamp from the official
-  [`main`](https://github.com/bjarneo/cliamp/tree/main) branch, then install this
-  project's `v1.5.0` plugin and daemon.
+- **v1.6.0 with a current Cliamp:** run any Cliamp build that includes the
+  version 2 IPC cutover ([`c75cdec`](https://github.com/bjarneo/cliamp/commit/c75cdec)),
+  then install this project's `v1.6.0` plugin and daemon.
 - **Older official Cliamp releases:** use this project's legacy
   [`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0),
   which transports playback through `rpc-state.json` and does not require the
   pub/sub API. Follow the [pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases)
   below.
 
-The Lua plugin and daemon must use the same release line: pair v1.5.0 with
-Cliamp main, or v1.4.0 with an older official Cliamp release. The transports are
-intentionally incompatible. Do not install the v1.5.0 Lua plugin into a Cliamp
-build that lacks `p:publish()`; its event handlers will fail when they try to
-publish, and no playback events will reach the daemon.
+The Lua plugin and daemon must use the same release line: pair v1.6.0 with a
+version 2 Cliamp, or v1.4.0 with an older official Cliamp release. The
+transports are intentionally incompatible. Do not install the v1.6.0 Lua plugin
+into a Cliamp build that lacks `p:publish()`; its event handlers will fail when
+they try to publish, and no playback events will reach the daemon. `v1.5.0` is
+superseded: its daemon sends the retired version 1 envelope and cannot subscribe
+to a current Cliamp socket at all.
 
 ## Prerequisites
 
-Before installing v1.5.0, make sure you have:
+Before installing v1.6.0, make sure you have:
 
 - Git and Go 1.26.5 or newer to build Cliamp from its official `main` branch.
 - Cliamp built from the official
   [`main`](https://github.com/bjarneo/cliamp/tree/main) branch and available as
-  `cliamp`. The branch must include the
-  [retained plugin event pub/sub merge](https://github.com/bjarneo/cliamp/commit/f373776d).
+  `cliamp`. The build must include the
+  [version 2 IPC cutover](https://github.com/bjarneo/cliamp/commit/c75cdec) and
+  the [retained plugin event pub/sub merge](https://github.com/bjarneo/cliamp/commit/f373776d).
 - The Discord desktop client. Discord in a web browser does not expose the local
   IPC socket used by Rich Presence.
 - A Discord account signed in to the desktop client.
@@ -56,16 +59,17 @@ daemon uses the community-maintained Cliamp Discord application by default and
 displays its static artwork. Album artwork through Last.fm is an optional
 enhancement.
 
-## Install v1.5.0 from release
+## Install v1.6.0 from release
 
-Use this path for a normal v1.5.0 installation on `amd64` or `arm64` after
+Use this path for a normal v1.6.0 installation on `amd64` or `arm64` after
 installing Cliamp from its official `main` branch. It installs the plugin
-through Cliamp and downloads the published `v1.5.0` daemon; Go is not required
+through Cliamp and downloads the published `v1.6.0` daemon; Go is not required
 for the plugin or daemon.
 
 ### Build Cliamp main
 
-Build and install the official branch containing the merged plugin pub/sub API:
+Build and install the official branch containing the version 2 IPC envelope and
+the merged plugin pub/sub API:
 
 ```sh
 git clone --branch main --single-branch \
@@ -84,7 +88,7 @@ resolves the new binary with `command -v cliamp`.
 ### Install the plugin
 
 ```sh
-cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.5.0
+cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.6.0
 cliamp plugins trust discord-rpc
 ```
 
@@ -96,13 +100,13 @@ shown by Cliamp before approving it. Restart Cliamp after installation.
 Install the daemon directly from this repository:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.5.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.6.0/install.sh | sh
 ```
 
 This command downloads code and executes it. To review the installer first:
 
 ```sh
-curl -fsSL -o install.sh https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.5.0/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.6.0/install.sh
 less install.sh
 sh install.sh
 rm install.sh
@@ -112,7 +116,7 @@ The installer:
 
 - Detects `amd64` or `arm64`.
 - Downloads the matching archive from the
-  [v1.5.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.5.0).
+  [v1.6.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.6.0).
 - Verifies the archive's GitHub Actions provenance attestation, bound to this repository's release workflow.
 - Verifies the archive against the published SHA-256 checksum.
 - Installs `cliamp-rpcd` to `~/.local/bin`.
@@ -128,7 +132,7 @@ first and pass options to it. Run `sh install.sh --help` for details.
 To remove only the daemon and service later:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.5.0/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.6.0/uninstall.sh | sh
 ```
 
 To review the uninstaller first, download it with `curl -fsSL -o uninstall.sh`,
@@ -153,7 +157,7 @@ curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-r
 Restart Cliamp after trusting the plugin. If another `discord-rpc` version is
 already installed, remove it first with `cliamp plugins remove discord-rpc`.
 The v1.4.0 plugin and daemon use `rpc-state.json`; do not mix either component
-with v1.5.0.
+with v1.6.0.
 
 ## Self-deploy from source
 
@@ -164,7 +168,7 @@ not use the release installer.
 ### Build the daemon
 
 ```sh
-git clone --branch v1.5.0 --single-branch \
+git clone --branch v1.6.0 --single-branch \
   https://github.com/fazaimron27/cliamp-plugin-discord-rpc.git
 cd cliamp-plugin-discord-rpc
 go test ./...
@@ -192,9 +196,9 @@ checkout or specify the matching custom directories:
 Restart Cliamp after installing the Lua plugin. When you edit that file later,
 run `cliamp plugins trust discord-rpc` again to approve its new hash, then
 restart Cliamp. If startup reports `attempt to call a non-function object` for
-`publish`, or the daemon reports that Cliamp rejected `subscribe`, verify that
-you installed a Cliamp build from the official `main` branch after the retained
-pub/sub merge. Otherwise follow the
+`publish`, or the daemon logs `subscribe to Cliamp events:` with
+`invalid_version`, verify that you installed a Cliamp build from the official
+`main` branch after the version 2 IPC cutover. Otherwise follow the
 [pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases).
 
 ## Start and verify
@@ -301,12 +305,22 @@ Command-line and environment overrides are also supported; run
 
 ### Cliamp rejects the subscription or plugin publishing fails
 
-Version 1.5.0 requires Cliamp's retained plugin event pub/sub API, which is now
-on the official [`main`](https://github.com/bjarneo/cliamp/tree/main) branch.
-Confirm that the running `cliamp` executable was built from that branch after
-commit [`f373776d`](https://github.com/bjarneo/cliamp/commit/f373776d), then
-reinstall and trust `discord-rpc.lua` and restart Cliamp. If you want to stay on
-an older tagged Cliamp release, follow the
+Version 1.6.0 requires Cliamp's version 2 IPC envelope and retained plugin event
+pub/sub API, both of which are on the official
+[`main`](https://github.com/bjarneo/cliamp/tree/main) branch. The daemon logs the
+exact rejection, so start with:
+
+```sh
+journalctl --user -u cliamp-rpcd -n 20
+```
+
+`invalid_version` means the running `cliamp` executable predates the
+[version 2 IPC cutover](https://github.com/bjarneo/cliamp/commit/c75cdec).
+`unknown operation` or a missing `publish` means it predates the
+[retained plugin event pub/sub merge](https://github.com/bjarneo/cliamp/commit/f373776d).
+In both cases rebuild `cliamp` from that branch, reinstall and trust
+`discord-rpc.lua`, then restart Cliamp. If you want to stay on an older tagged
+Cliamp release, follow the
 [pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases) instead.
 
 ### The service fails immediately

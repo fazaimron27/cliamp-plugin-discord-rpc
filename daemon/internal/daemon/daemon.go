@@ -166,6 +166,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 					clear()
 					return nil
 				}
+				log.Printf("subscribe to Cliamp events: %v", err)
 				reset(cliampTimer, reconnectDelay)
 				reconnectDelay = min(2*reconnectDelay, 15*time.Second)
 				continue
