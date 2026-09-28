@@ -12,7 +12,10 @@ permissions:
 jobs:
   validate:
     name: Test, vet, and build
-    runs-on: ubuntu-latest
+    # Pinned to a dated image: ubuntu-latest moved to Ubuntu 26.04 from
+    # 2026-10-19, so the floating label would change this job's OS without a
+    # commit here. See daemon/tests/workflows_test.go.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       # The Lua contract tests skip when luajit is absent, which is right for a

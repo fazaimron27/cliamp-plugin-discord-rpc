@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -67,17 +69,67 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 	// result to read or pipe, not a log.
 	fmt.Fprintf(out, "cliamp-rpcd %s\n\n", version.Number)
 
-	// Cliamp: subscribing is the honest probe, because it is the call that
-	// exercises the version 2 envelope. A Cliamp predating the cutover is
-	// reported here rather than appearing as a silent absence of events.
-	states, err := cliampipc.Subscribe(ctx, cfg.CliampSocket)
-	if err != nil {
-		fail("cliamp", err.Error())
-		line("skip", "plugin", "not readable without a Cliamp subscription")
+	// The transport comes first because it decides which of the two Cliamp
+	// probes below can say anything, and because a mismatch in it looks exactly
+	// like a broken Cliamp from the outside: the daemon reads one source while
+	// the plugin writes the other.
+	transport := cfg.Transport
+	if transport == "" {
+		transport = config.TransportIPC
+	}
+	source := cfg.TransportSource
+	if source == "" {
+		source = config.SourceDefault
+	}
+	if warning := cfg.TransportWarning(); warning != "" {
+		line("warn", "transport", warning)
 	} else {
-		line("ok", "cliamp", fmt.Sprintf("subscribed to %s at %s", cliampipc.PlaybackTopic, cfg.CliampSocket))
-		status, detail := pluginVersion(ctx, states)
-		line(status, "plugin", detail)
+		line("ok", "transport", fmt.Sprintf("%s, from the %s", transport, source))
+	}
+
+	// The plugin's release is reported from whichever source the transport can
+	// read: a retained snapshot over IPC, the state document here.
+	reportPlugin := func(detail statewatch.Detail) {
+		if detail.State.PluginVersion == "" {
+			line("warn", "plugin", "the state document carries no plugin version, so the plugin predates the version report")
+			return
+		}
+		status, report := relation(detail.State.PluginVersion)
+		line(status, "plugin", report)
+	}
+
+	// Cliamp: subscribing is the honest probe of the IPC transport, because it
+	// is the call that exercises the version 2 envelope. A Cliamp predating the
+	// cutover is reported here rather than appearing as a silent absence of
+	// events. The file transport's equivalent is reading the document: it is
+	// what the run loop does, and it is the only way to tell a Cliamp that has
+	// stopped from one that never started.
+	if transport == config.TransportFile {
+		detail := statewatch.Inspect(cfg.StatePath, cfg.StateMaxAge)
+		switch {
+		case !detail.Present:
+			fail("cliamp", fmt.Sprintf("no state document at %s, so Cliamp is not running or the plugin is not writing one", cfg.StatePath))
+			line("skip", "plugin", "not readable without a state document")
+		case detail.Problem != nil:
+			fail("cliamp", fmt.Sprintf("%s cannot be read: %v", cfg.StatePath, detail.Problem))
+			line("skip", "plugin", "not readable without a state document")
+		case detail.Lapsed:
+			fail("cliamp", fmt.Sprintf("the state document at %s was last written %s ago, past the %s window", cfg.StatePath, detail.Age.Round(time.Second), cfg.StateMaxAge))
+			reportPlugin(detail)
+		default:
+			line("ok", "cliamp", fmt.Sprintf("read %s, last written %s ago", cfg.StatePath, detail.Age.Round(time.Second)))
+			reportPlugin(detail)
+		}
+	} else {
+		states, err := cliampipc.Subscribe(ctx, cfg.CliampSocket)
+		if err != nil {
+			fail("cliamp", err.Error())
+			line("skip", "plugin", "not readable without a Cliamp subscription")
+		} else {
+			line("ok", "cliamp", fmt.Sprintf("subscribed to %s at %s", cliampipc.PlaybackTopic, cfg.CliampSocket))
+			status, detail := pluginVersion(ctx, states)
+			line(status, "plugin", detail)
+		}
 	}
 
 	// Discord: a real handshake, because "the socket exists" and "Discord
@@ -99,10 +151,23 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		line("ok", "last.fm", "the API key was accepted")
 	}
 
-	if _, err := os.Stat(cfg.CliampConfig); err == nil {
-		line("ok", "config", cfg.CliampConfig)
+	// The question is whether the daemon can use this file, which is not what
+	// os.Stat answers: a directory stat succeeds while being no config file at
+	// all, so the probe used to report `ok` for a path that contributes nothing.
+	// Reading it is what Load does, so reading it is what this reports on.
+	//
+	// An unusable config is still not a hard failure. The built-in defaults are
+	// a working configuration, so this warns and the exit code stays 0.
+	if _, err := os.ReadFile(cfg.CliampConfig); err != nil {
+		// The path is already on this line, so report the reason alone rather
+		// than the PathError's restatement of it.
+		var pathError *os.PathError
+		if errors.As(err, &pathError) {
+			err = pathError.Err
+		}
+		line("warn", "config", fmt.Sprintf("%s is not readable, using defaults: %v", cfg.CliampConfig, err))
 	} else {
-		line("warn", "config", fmt.Sprintf("%s is not readable, using defaults", cfg.CliampConfig))
+		line("ok", "config", cfg.CliampConfig)
 	}
 
 	return code
@@ -124,22 +189,29 @@ func pluginVersion(ctx context.Context, states <-chan playback.State) (string, s
 			if state.PluginVersion == "" {
 				return "warn", "the plugin published no version, so it predates the version report"
 			}
-			reported := normalize(state.PluginVersion)
-			switch version.Relate(reported, version.Number) {
-			case version.Same:
-				return "ok", fmt.Sprintf("plugin v%s matches this daemon", reported)
-			case version.PluginBehind:
-				return "warn", fmt.Sprintf("plugin v%s is older than daemon v%s, so the plugin is the half that is behind", reported, version.Number)
-			case version.DaemonBehind:
-				return "warn", fmt.Sprintf("plugin v%s is newer than daemon v%s, so the daemon is the half that is behind", reported, version.Number)
-			default:
-				return "warn", fmt.Sprintf("plugin v%s is not comparable to daemon v%s", reported, version.Number)
-			}
+			return relation(state.PluginVersion)
 		case <-timer.C:
 			return "warn", "no retained snapshot, so the plugin version is unknown"
 		case <-ctx.Done():
 			return "warn", "timed out waiting for a snapshot"
 		}
+	}
+}
+
+// relation describes how a plugin's reported release compares to this daemon's.
+// Both transports report the same version in the same way, so they share this:
+// naming which half is behind is the answer either way.
+func relation(reported string) (string, string) {
+	reported = normalize(reported)
+	switch version.Relate(reported, version.Number) {
+	case version.Same:
+		return "ok", fmt.Sprintf("plugin v%s matches this daemon", reported)
+	case version.PluginBehind:
+		return "warn", fmt.Sprintf("plugin v%s is older than daemon v%s, so the plugin is the half that is behind", reported, version.Number)
+	case version.DaemonBehind:
+		return "warn", fmt.Sprintf("plugin v%s is newer than daemon v%s, so the daemon is the half that is behind", reported, version.Number)
+	default:
+		return "warn", fmt.Sprintf("plugin v%s is not comparable to daemon v%s", reported, version.Number)
 	}
 }
 

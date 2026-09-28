@@ -95,4 +95,31 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("release workflow", func(t *testing.T) {
+		source := repoFile(t, ".github/workflows/release.yml")
+		// release.yml is the only place that checks the tag against
+		// version.Number, and it reads the constant at run time rather than
+		// restating it. So any version written into this file is a pin with
+		// nothing guarding it, which is what the comment beside the tag check
+		// used to be: it named a version pair that went stale on the next
+		// release, and the guard could not see the file it lived in.
+		//
+		// Action pins are exempt. The v-prefixed string in
+		// `uses: actions/checkout@<sha> # v5.0.0` names another project's
+		// release, so bumping an action has nothing to do with version.Number.
+		// No other version-shaped string belongs in this file.
+		versioned := regexp.MustCompile(`v?[0-9]+\.[0-9]+\.[0-9]+`)
+		for index, rawLine := range strings.Split(source, "\n") {
+			if strings.Contains(rawLine, "uses:") {
+				continue
+			}
+			for _, found := range versioned.FindAllString(rawLine, -1) {
+				if found != number && found != "v"+number {
+					t.Errorf("release.yml:%d names %s, which is neither the current release nor an action pin",
+						index+1, found)
+				}
+			}
+		}
+	})
 }

@@ -11,7 +11,11 @@ permissions:
 jobs:
   release:
     name: Validate and build
-    runs-on: ubuntu-latest
+    # Pinned to a dated image: ubuntu-latest moved to Ubuntu 26.04 from
+    # 2026-10-19, so the floating label would change this job's OS without a
+    # commit here. The build sets CGO_ENABLED=0, so the image the binary is
+    # built on cannot raise the glibc floor of the released archive.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -26,8 +30,10 @@ jobs:
 
       # The tag names the archives and the release, while version.Number is what
       # the daemon reports. Nothing else connects the two, so a tag pushed
-      # against a stale constant would publish v1.8.0 archives containing a
-      # binary that answers "1.7.1".
+      # against a stale constant would publish archives named for the new tag
+      # containing a binary that still answers with the old one. The versions
+      # are described rather than written out on purpose: the pair named here
+      # when this comment was added went stale on the very next release.
       - name: Verify tag matches the version constant
         run: |
           set -euo pipefail
@@ -105,7 +111,8 @@ jobs:
   publish:
     name: Publish release
     needs: release
-    runs-on: ubuntu-latest
+    # Pinned for the same reason as the build job above.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write

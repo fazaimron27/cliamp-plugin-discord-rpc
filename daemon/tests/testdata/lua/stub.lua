@@ -54,6 +54,11 @@ function handle:on(event, callback)
   M.handlers[event] = callback
 end
 
+-- The plugin reads its transport at load. The stub is unconfigured, so it reads
+-- what an unconfigured Cliamp gives it: the ipc transport, which is the path
+-- this contract test asserts on.
+function handle:config() end
+
 function handle:register() end
 
 M.registered = nil
