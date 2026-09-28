@@ -186,12 +186,13 @@ func TestVersionWatchStaysQuietForCompatiblePlugins(t *testing.T) {
 }
 
 func TestVersionWatchReportsPluginBehind(t *testing.T) {
+	older := olderLine(t)
 	var watch versionWatch
-	warning := watch.observe("1.6.0")
+	warning := watch.observe(older)
 	if warning == "" {
 		t.Fatal("older plugin line produced no warning")
 	}
-	if !strings.Contains(warning, "1.6.0") || !strings.Contains(warning, version.Number) {
+	if !strings.Contains(warning, older) || !strings.Contains(warning, version.Number) {
 		t.Fatalf("warning does not name both versions: %q", warning)
 	}
 	if !strings.Contains(warning, "cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v"+version.Number) {
@@ -205,18 +206,19 @@ func TestVersionWatchReportsPluginBehind(t *testing.T) {
 }
 
 func TestVersionWatchReportsDaemonBehind(t *testing.T) {
+	newer := newerLine(t)
 	var watch versionWatch
-	warning := watch.observe("1.8.0")
+	warning := watch.observe(newer)
 	if warning == "" {
 		t.Fatal("newer plugin line produced no warning")
 	}
-	if !strings.Contains(warning, "1.8.0") || !strings.Contains(warning, version.Number) {
+	if !strings.Contains(warning, newer) || !strings.Contains(warning, version.Number) {
 		t.Fatalf("warning does not name both versions: %q", warning)
 	}
 	if !strings.Contains(warning, "daemon is the half that is behind") {
 		t.Fatalf("warning does not name the daemon as behind: %q", warning)
 	}
-	if !strings.Contains(warning, "raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.8.0/install.sh") {
+	if !strings.Contains(warning, "raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v"+newer+"/install.sh") {
 		t.Fatalf("warning does not point at the daemon update on the newer line: %q", warning)
 	}
 	if !strings.Contains(warning, "rebuild from source") {
@@ -230,24 +232,26 @@ func TestVersionWatchReportsDaemonBehind(t *testing.T) {
 }
 
 func TestVersionWatchNormalizesTagInDaemonAdvice(t *testing.T) {
-	for _, pluginVersion := range []string{"1.8.0", "v1.8.0", " 1.8.0 "} {
+	newer := newerLine(t)
+	for _, pluginVersion := range []string{newer, "v" + newer, " " + newer + " "} {
 		var watch versionWatch
 		warning := watch.observe(pluginVersion)
-		if !strings.Contains(warning, "/v1.8.0/install.sh") {
+		if !strings.Contains(warning, "/v"+newer+"/install.sh") {
 			t.Fatalf("observe(%q) produced a malformed tag: %q", pluginVersion, warning)
 		}
 	}
 }
 
 func TestVersionWatchRendersReportedVersionCleanly(t *testing.T) {
+	newer, older := newerLine(t), olderLine(t)
 	tests := []struct {
 		plugin   string
 		expected string
 	}{
-		{"1.8.0", "plugin v1.8.0 is newer than daemon"},
-		{"v1.8.0", "plugin v1.8.0 is newer than daemon"},
-		{" 1.8.0 ", "plugin v1.8.0 is newer than daemon"},
-		{"v1.6.0", "plugin v1.6.0 does not match daemon"},
+		{newer, "plugin v" + newer + " is newer than daemon"},
+		{"v" + newer, "plugin v" + newer + " is newer than daemon"},
+		{" " + newer + " ", "plugin v" + newer + " is newer than daemon"},
+		{"v" + older, "plugin v" + older + " does not match daemon"},
 	}
 	for _, test := range tests {
 		var watch versionWatch

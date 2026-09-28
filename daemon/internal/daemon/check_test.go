@@ -34,8 +34,9 @@ func (unreachableDiscord) ClearActivity() error                 { return nil }
 func (unreachableDiscord) Close() error                         { return nil }
 
 // newerLine and olderLine derive an adjacent release line from the daemon's own
-// instead of hardcoding one, so a version bump cannot leave these fixtures
-// asserting a pairing that is no longer adjacent.
+// instead of hardcoding one, so a version bump cannot leave a fixture asserting
+// a pairing that is no longer adjacent. The version-watch fixtures in
+// daemon_test.go rely on the same derivation.
 func newerLine(t *testing.T) string {
 	t.Helper()
 	return adjacentLine(t, 1)
