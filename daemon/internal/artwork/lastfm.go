@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const userAgent = "cliamp-rpcd/1.6.0"
+const userAgent = "cliamp-rpcd/1.6.1"
 
 const (
 	maxResponseSize = 1 << 20
