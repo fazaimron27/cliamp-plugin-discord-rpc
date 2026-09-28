@@ -1,9 +1,10 @@
 # Cliamp Discord RPC Plugin
 
 Discord Rich Presence for [Cliamp](https://www.cliamp.stream/). The Lua plugin
-publishes retained playback snapshots through Cliamp's in-memory IPC pub/sub
-broker, and the `cliamp-rpcd` daemon forwards them to the local Discord desktop
-client. Playback state is not written to disk.
+hands playback snapshots to the `cliamp-rpcd` daemon, which forwards them to the
+local Discord desktop client. Snapshots travel through Cliamp's in-memory IPC
+pub/sub broker by default, and through a state file when
+[the transport is configured](#choose-the-playback-transport) to `file`.
 
 ![Cliamp Discord Rich Presence](https://github.com/user-attachments/assets/f16ed6b7-052d-4bd3-b5a3-cdfc8fb64ff5)
 
@@ -13,7 +14,7 @@ client. Playback state is not written to disk.
 
 ## Compatibility
 
-The current `v1.8.0` release requires a Cliamp build that speaks IPC protocol
+The default `ipc` transport requires a Cliamp build that speaks IPC protocol
 version 2 and exposes the plugin event pub/sub API. Cliamp made version 2
 mandatory for its socket, so an older build answers the daemon's subscription
 with a structured `invalid_version` error. Use one of these combinations:
@@ -21,19 +22,26 @@ with a structured `invalid_version` error. Use one of these combinations:
 - **v1.8.0 with a current Cliamp:** run any Cliamp build that includes the
   version 2 IPC cutover ([`c75cdec`](https://github.com/bjarneo/cliamp/commit/c75cdec)),
   then install this project's `v1.8.0` plugin and daemon.
+- **An older Cliamp with the v1.8.0 daemon:** configure the
+  [`file` transport](#choose-the-playback-transport). The daemon reads the state
+  document the pinned v1.4.0 plugin writes — same field names, same schema, same
+  path — so a Cliamp build without the pub/sub API can run the
+  [pinned v1.4.0 plugin](#legacy-v140-for-older-cliamp-releases) with this
+  daemon. It requires no `p:publish()`.
 - **Older official Cliamp releases:** use this project's legacy
   [`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0),
   which transports playback through `rpc-state.json` and does not require the
   pub/sub API. Follow the [pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases)
   below.
 
-The Lua plugin and daemon must use the same release line: pair v1.8.0 with a
-version 2 Cliamp, or v1.4.0 with an older official Cliamp release. The
-transports are intentionally incompatible. Do not install the v1.8.0 Lua plugin
-into a Cliamp build that lacks `p:publish()`; its event handlers will fail when
-they try to publish, and no playback events will reach the daemon. `v1.5.0` is
-superseded: its daemon sends the retired version 1 envelope and cannot subscribe
-to a current Cliamp socket at all.
+The Lua plugin and daemon must use the same release line, unless the transport
+is set to match them across the two as described below. Do not install the
+v1.8.0 Lua plugin into a Cliamp build that lacks `p:publish()` while that plugin
+is left on the default transport: its event handlers will fail when they try to
+publish, and no playback events will reach the daemon. Set
+[`transport = "file"`](#choose-the-playback-transport) for such a build instead.
+`v1.5.0` is superseded: its daemon sends the retired version 1 envelope and
+cannot subscribe to a current Cliamp socket at all.
 
 ## Prerequisites
 
@@ -156,8 +164,11 @@ curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-r
 
 Restart Cliamp after trusting the plugin. If another `discord-rpc` version is
 already installed, remove it first with `cliamp plugins remove discord-rpc`.
-The v1.4.0 plugin and daemon use `rpc-state.json`; do not mix either component
-with v1.8.0.
+The v1.4.0 pair uses `rpc-state.json` rather than the pub/sub API, so do not run
+the v1.4.0 daemon with the v1.8.0 plugin, and do not leave the v1.4.0 plugin on
+the default transport with a Cliamp build that lacks `p:publish()`. The mixture
+that does work is the v1.8.0 daemon reading what the v1.4.0 plugin writes:
+configure it for the [`file` transport](#choose-the-playback-transport).
 
 ## Self-deploy from source
 
@@ -227,11 +238,17 @@ Keep this terminal open while using the daemon and press `Ctrl+C` to stop it.
 Pausing or stopping playback clears the activity, and the daemon reconnects
 automatically if Discord is started or restarted later.
 
+With [`transport = "file"`](#choose-the-playback-transport), the first line
+names the state document instead of the socket and the second reads `watching
+for Cliamp state in <path>`: the daemon is reading the document rather than
+subscribing to it.
+
 Run `~/.local/bin/cliamp-rpcd --help` for all daemon options,
 `~/.local/bin/cliamp-rpcd --version` to print the release and exit, or
 `~/.local/bin/cliamp-rpcd --check` to probe the environment before starting.
-The daemon subscribes to `plugin.discord-rpc.playback` on Cliamp's owner-only
-local IPC socket and reconnects automatically when Cliamp restarts.
+With the default `ipc` transport, the daemon subscribes to
+`plugin.discord-rpc.playback` on Cliamp's owner-only local IPC socket and
+reconnects automatically when Cliamp restarts.
 
 If the daemon logs a warning that the plugin and daemon versions do not match,
 the two halves came from different release lines. The warning names the half that
@@ -310,6 +327,45 @@ Newly uploaded Discord assets can take several minutes to become available.
 Command-line and environment overrides are also supported; run
 `cliamp-rpcd --help` for details.
 
+### Choose the playback transport
+
+Snapshots leave the plugin over Cliamp's IPC broker by default. To use a state
+file instead, set the transport once:
+
+```toml
+[plugins.discord-rpc]
+transport = "file"
+```
+
+The plugin reads this key and so does the daemon, from the same `config.toml`,
+so one setting moves both halves and neither has to be told what the other
+chose. Restart Cliamp after changing it.
+
+Use `file` when the Cliamp build does not expose `p:publish()`, which is what
+the default transport needs. Nothing else changes: artwork, version reporting,
+and pause/stop behavior work the same way, and the daemon still clears the
+activity when Cliamp quits — the plugin stops writing its heartbeat, and the
+document stops counting as live.
+
+Two further keys belong to this transport and are optional:
+
+```toml
+[plugins.discord-rpc]
+state_path = "/home/you/.local/share/cliamp/rpc-state.json"  # where the document lives
+```
+
+`state_path` is the document's location, and the daemon watches the directory it
+sits in. It has no command-line or environment equivalent, because a path that
+reaches only the daemon would have the plugin writing elsewhere. The window
+after which a silent document is treated as a dead Cliamp does have one:
+`--max-age`, 45 seconds by default, which is three heartbeats.
+
+A `--transport` flag and `CLIAMP_DISCORD_TRANSPORT` override the file's value
+for the daemon alone. They exist for troubleshooting, and a daemon that uses one
+warns at startup that the plugin will read `config.toml` instead. `cliamp-rpcd
+--check` reports the transport in use and where its value came from, which is
+the quickest way to see whether the two halves agree.
+
 ## Troubleshooting
 
 Start with the built-in diagnostic. It probes each transport for real and reports
@@ -322,6 +378,7 @@ what it found:
 ```text
 cliamp-rpcd 1.8.0
 
+transport ok    ipc, from the default
 cliamp    ok    subscribed to plugin.discord-rpc.playback at /home/faza/.config/cliamp/cliamp.sock
 plugin    ok    plugin v1.8.0 matches daemon v1.8.0
 discord   fail  Discord IPC unavailable: dial unix /run/user/1000/discord-ipc-0: connect: no such file or directory
@@ -342,6 +399,11 @@ because the daemon runs without artwork and treats version skew as a warning
 rather than an error. It makes exactly one connection to each half and never
 publishes an activity, so running it does not disturb your Discord presence.
 
+The `transport` line is the one to read first when nothing appears: it names the
+transport in use and where that value came from. A `warn` there means the daemon
+and the plugin are reading different settings, which from Discord's side looks
+exactly like a broken Cliamp.
+
 ### Discord activity does not appear
 
 - Confirm the Discord desktop client is running under the same Linux user.
@@ -357,6 +419,8 @@ publishes an activity, so running it does not disturb your Discord presence.
 - Confirm Last.fm has artwork for that artist and track.
 - Wait for the Discord asset named `cliamp` to finish processing; it is the
   fallback when Last.fm has no image.
+- A lookup that fails is retried while the track plays, so a network blip
+  resolves itself without restarting anything.
 
 ### Cliamp rejects the subscription or plugin publishing fails
 
@@ -390,6 +454,31 @@ systemctl --user stop cliamp-rpcd
 The built-in Application ID is used unless a custom value is supplied. The
 Last.fm API key is optional and artwork lookup is disabled when it is empty.
 
+### Nothing appears with the file transport
+
+The `cliamp` line of `--check` reads the state document, so it says what the run
+loop cannot: why a document that exists is not being used.
+
+```text
+transport ok    file, from the config file
+cliamp    fail  no state document at /home/you/.local/share/cliamp/rpc-state.json, so Cliamp is not running or the plugin is not writing one
+```
+
+- **No document.** Cliamp has not run since `transport = "file"` was added, or
+  the plugin was not restarted after it. Restart Cliamp, then play something.
+- **A document that cannot be read.** The report names the reason. A schema this
+  daemon does not know means the two halves came from different releases, and
+  the `plugin` line usually says which half is behind.
+- **A document last written a while ago.** The plugin has stopped writing its
+  heartbeat, so Cliamp has quit or crashed; the daemon has already cleared the
+  activity and is waiting for the next document. If Cliamp is still running, the
+  plugin's write is failing, which it logs to Cliamp's own log.
+
+`--check` also reports a state path that differs from the default when
+`state_path` sets one, so a driver between the two lines is a setting the two
+halves do not share: the plugin writes the default path unless the same key
+reaches it in `[plugins.discord-rpc]`.
+
 ## How it works
 
 The plugin publishes a complete playback snapshot to the retained
@@ -399,11 +488,21 @@ in memory and immediately replays it to a newly connected daemon. The daemon
 resolves optional album artwork through Last.fm and updates Discord through its
 local IPC socket.
 
-The subscription connection is also the liveness signal. Pausing or stopping
-clears activity; an unclean Cliamp exit closes the stream and clears activity
-immediately. The daemon reconnects with bounded backoff and receives the latest
-retained snapshot after Cliamp returns. No playback state file, filesystem
-watcher, heartbeat, or polling loop is used.
+With that default transport the subscription is also the liveness signal:
+pausing or stopping clears activity, and an unclean Cliamp exit closes the
+stream and clears activity immediately. The daemon reconnects with bounded
+backoff and receives the latest retained snapshot after Cliamp returns.
 
-See [Architecture](docs/architecture.md) for the state contract, package
+With `transport = "file"` the same snapshots are written to
+`~/.local/share/cliamp/rpc-state.json` instead, and the daemon watches that file
+rather than subscribing. Two fields get their own job in that document: the
+change time, which moves only when the playback does and from which the progress
+bar is interpolated, and a heartbeat, refreshed every 15 seconds whether or not
+anything changed. The heartbeat stands in for the connection: a document that
+stops being refreshed, or is removed on quit, clears the activity. Nothing is
+written to disk unless this transport is selected.
+
+Behaviors that hold for both: pausing or stopping clears activity, and the
+daemon's half of the contract is described in
+[Architecture](docs/architecture.md) — the state document's schema, package
 responsibilities, artwork flow, and failure behavior.

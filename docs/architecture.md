@@ -1,29 +1,39 @@
 # Architecture
 
 Cliamp Discord RPC is split into a sandboxed Lua plugin and a native Go daemon.
-The plugin observes playback events and publishes local messages; the daemon
-owns Discord IPC and optional Last.fm requests.
+The plugin observes playback events and hands playback snapshots to the daemon,
+which owns Discord IPC and optional Last.fm requests. Two transports carry those
+snapshots, and the daemon treats them alike: its subscription and its state-file
+watch both deliver the same playback snapshots, so nothing downstream knows
+which one is in use.
 
 ## Data Flow
 
 ```text
 Cliamp events
-  -> discord-rpc.lua
-  -> p:publish("playback", snapshot, {retain = true})
-  -> Cliamp in-memory event broker
-  -> ~/.config/cliamp/cliamp.sock subscription
+  -> discord-rpc.lua                  transport: ipc (default) or file
+       ipc:   p:publish("playback", snapshot, {retain = true})
+              -> Cliamp in-memory event broker
+              -> ~/.config/cliamp/cliamp.sock subscription
+       file:  cliamp.fs.write(the snapshot as a document)
+              -> ~/.local/share/cliamp/rpc-state.json
+              -> fsnotify watch on the state directory
   -> cliamp-rpcd
        -> Last.fm track.getInfo
        -> Discord SET_ACTIVITY
 ```
 
 The root-level `discord-rpc.lua` file is also the repository entrypoint required
-by Cliamp's `cliamp-plugin-<name>` install-source convention. This transport
-requires the retained plugin event pub/sub API merged into Cliamp's official
-`main` branch in
-[`f373776d`](https://github.com/bjarneo/cliamp/commit/f373776d). Plugin release
-v1.4.0 remains compatible with older Cliamp releases by using the former
-state-file transport.
+by Cliamp's `cliamp-plugin-<name>` install-source convention. The `ipc`
+transport requires the retained plugin event pub/sub API merged into Cliamp's
+official `main` branch in
+[`f373776d`](https://github.com/bjarneo/cliamp/commit/f373776d).
+
+The `file` transport asks nothing of Cliamp beyond `cliamp.fs`, so this release
+also serves builds that predate the pub/sub API. It is not a legacy-only path:
+it is a second transport for the same plugin, selected by the same
+`plugins.discord-rpc.transport` key that the daemon reads, so one setting moves
+both halves. Neither half needs to be told what the other chose.
 
 ## Pub/Sub Contract
 
@@ -69,20 +79,65 @@ event timestamp and playback position to derive Discord's timeline. Snapshots
 whose positions match natural progression preserve the timeline; a track
 change, resume, or position jump creates a new anchor.
 
+## State File Contract
+
+The `file` transport writes one JSON document at
+`~/.local/share/cliamp/rpc-state.json` (`plugins.discord-rpc.state_path`
+overrides the path). It carries the same playback snapshot the pub/sub payload
+does, with two additions and one rule:
+
+- `updated_at` is the snapshot's change time, and it moves only when the
+  playback fields do. It becomes the snapshot's observation time, which is what
+  the timeline is derived from, so a document whose change time moved while the
+  position stood still would re-anchor Discord's progress bar on a track that
+  had not moved.
+- `heartbeat` is refreshed on a 15-second timer whether or not anything changed.
+  The daemon never reads it as playback state. It is the liveness signal the
+  subscription connection gives the `ipc` transport, standing in for a signal a
+  file cannot carry: a document whose heartbeat is older than
+  `--max-age` (45 s by default, two missed beats) is not evidence that Cliamp is
+  running.
+- `v` declares the document's schema, currently 1. A document declaring another
+  schema is refused rather than read loosely, because a version this daemon has
+  not been taught may mean something different by the same field names. The
+  refusal is silent in the run loop and visible in `--check`, which reads the
+  document and reports why it could not be used.
+
+The daemon watches the document's directory rather than the document, because
+the plugin writes with a plain write that replaces the file: a watch on the file
+would be watching an inode the next write leaves behind. Reads are debounced
+until the writes stop, and a read that fails or lands mid-write is ignored
+rather than treated as evidence about the track, since the next write heals it.
+
+Unlike the subscription, the watch has no close event to play the part of
+Cliamp quitting, so a state change is delivered instead: a document that is
+removed, or one whose heartbeat ages out, becomes a `stopped` snapshot. The
+channel stays open for the daemon's lifetime, because a closed channel means
+"reconnect" to the run loop and there is nothing to reconnect. This is the same
+route a `stopped` payload takes over IPC: the activity is cleared.
+
+The `file` transport therefore also reads the documents release v1.4.0 writes:
+same field names, same schema, same default path. A Cliamp build without the
+pub/sub API can run this daemon with the pinned v1.4.0 plugin. Legacy documents
+carry no `plugin_version`, so the version warning stays silent for them, exactly
+as it does for an `ipc` snapshot from a plugin that predates the report.
+
 ## Repository Layout
 
 ```text
 cliamp-plugin-discord-rpc/
 ├── daemon/
 │   ├── cmd/cliamp-rpcd/
-│   └── internal/
-│       ├── artwork/
-│       ├── cliamp/
-│       ├── config/
-│       ├── daemon/
-│       ├── discord/
-│       ├── playback/
-│       └── presence/
+│   ├── internal/
+│   │   ├── artwork/
+│   │   ├── cliamp/
+│   │   ├── config/
+│   │   ├── daemon/
+│   │   ├── discord/
+│   │   ├── playback/
+│   │   ├── presence/
+│   │   └── statewatch/
+│   └── tests/
 ├── docs/
 ├── discord-rpc.lua
 ├── install.sh
@@ -95,9 +150,16 @@ cliamp-plugin-discord-rpc/
 
 - `daemon/cmd/cliamp-rpcd` handles startup and operating-system signals.
 - `daemon/internal/config` loads flags, environment overrides, and
-  `[plugins.discord-rpc]` from Cliamp's TOML config.
+  `[plugins.discord-rpc]` from Cliamp's TOML config. The transport is the one
+  setting that belongs to both halves at once, so this package records where its
+  value came from and can say when a flag or environment override has the plugin
+  reading a different one.
 - `daemon/internal/cliamp` subscribes to retained and live plugin events over
   Cliamp's owner-only Unix socket.
+- `daemon/internal/statewatch` reads and watches the state document. It presents
+  the same interface as the subscription — a channel of playback snapshots — so
+  the run loop does not branch on the transport, and it owns the document's
+  liveness rules.
 - `daemon/internal/playback` validates snapshots and derives private identity
   and public presence keys.
 - `daemon/internal/presence` builds typed Discord Listening activities.
@@ -121,12 +183,29 @@ A subscription disconnect clears activity immediately. This handles clean and
 unclean Cliamp exits without heartbeat expiry. The daemon reconnects with
 bounded backoff and receives retained state when Cliamp is available again.
 
+The state file has no connection to close, so its equivalent is a retraction on
+the same channel: a removed document, or one whose heartbeat has aged out,
+arrives as a `stopped` snapshot and clears activity the same way. A Cliamp that
+crashes mid-track leaves its last document behind, and the heartbeat window is
+what stops that document from holding the card indefinitely.
+
 ## Artwork
 
-The daemon calls Last.fm `track.getInfo` with artist and title, selects the
-largest valid HTTPS image, and caches both hits and misses for its lifetime. A
-missing API key, failed lookup, or absent image falls back to the Discord
+The daemon calls Last.fm `track.getInfo` with artist and title and selects the
+largest valid HTTPS image. What a lookup found is remembered with an expiry: a
+resolved URL is reused for an hour, while an answer carrying no image is retried
+after 30 seconds. A track's artwork does not change while it plays, but whether
+Last.fm could supply it can, so a transient miss outlives nothing and the
+resolver does not accumulate a lookup for every track the daemon has ever seen.
+A missing API key, failed lookup, or absent image falls back to the Discord
 application asset configured by `--large-image`.
+
+Lookups run on their own goroutine, and the loop publishes a Listening activity
+as soon as it knows the track — with artwork when the answer is already in hand,
+and again when a lookup that was still open returns one. The loop is the only
+thing that talks to Discord, so a request it waited on would queue every pause,
+stop, and track change behind Last.fm for up to the client's four-second
+timeout.
 
 The community-maintained default Discord application ID is used unless a custom
 ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
