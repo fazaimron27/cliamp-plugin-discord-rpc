@@ -137,16 +137,15 @@ as it does for an `ipc` snapshot from a plugin that predates the report.
 cliamp-plugin-discord-rpc/
 ├── daemon/
 │   ├── cmd/cliamp-rpcd/
-│   ├── internal/
-│   │   ├── artwork/
-│   │   ├── cliamp/
-│   │   ├── config/
-│   │   ├── daemon/
-│   │   ├── discord/
-│   │   ├── playback/
-│   │   ├── presence/
-│   │   └── statewatch/
-│   └── tests/
+│   └── internal/
+│       ├── artwork/
+│       ├── cliamp/
+│       ├── config/
+│       ├── daemon/
+│       ├── discord/
+│       ├── playback/
+│       ├── presence/
+│       └── statewatch/
 ├── docs/
 ├── discord-rpc.lua
 ├── install.sh
@@ -242,14 +241,26 @@ accept.
 
 ## Testing
 
+Every test lives beside the package it tests, in that package's directory. There
+is no separate test tree, so the directory a test is found in is the package it
+covers. Which of the two test packages it is written as says what it is allowed
+to see, and that choice is the whole rule:
+
+- the **external test package** (`playback_test`) can reach only the exported
+  surface, so a rename or a removed symbol inside the package cannot silently
+  keep it passing — this is where a contract test belongs;
+- the **package itself** (`playback`) is for a test whose subject has no public
+  surface at all, such as a value the API deliberately does not report.
+
 The plugin is half the shipped surface and none of it is Go, so the payload
 contract above is enforced by running the real `discord-rpc.lua` against a stub
 of Cliamp's plugin API and holding what it publishes to `playback.State`. The
-harness is `daemon/tests/testdata/lua`, driven by
-`daemon/tests/lua_contract_test.go`, which asserts that the published keys are
-exactly the ones the daemon accepts, that nothing the daemon would reject is
-published, and that a scenario publishing nothing is caught rather than passing
-vacuously. A field renamed on either side of the Lua/Go boundary fails there.
+harness is `daemon/internal/playback/testdata/lua`, driven by
+`daemon/internal/playback/lua_contract_test.go`, which asserts that the published
+keys are exactly the ones the daemon accepts, that nothing the daemon would
+reject is published, and that a scenario publishing nothing is caught rather
+than passing vacuously. A field renamed on either side of the Lua/Go boundary
+fails there.
 
 Those tests need `luajit` and skip without it, so a local `go test ./...` can
 pass with them unrun. CI installs `luajit` and sets `CLIAMP_REQUIRE_LUA`, which

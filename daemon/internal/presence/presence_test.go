@@ -1,4 +1,4 @@
-package tests
+package presence_test
 
 import (
 	"encoding/json"

@@ -1,4 +1,4 @@
-package tests
+package playback_test
 
 import (
 	"bytes"
@@ -50,7 +50,7 @@ func runScenario(t *testing.T, scenario string) pluginRun {
 	command := exec.Command(
 		interpreter,
 		filepath.Join("testdata", "lua", "run.lua"),
-		filepath.Join("..", "..", "discord-rpc.lua"),
+		filepath.Join("..", "..", "..", "discord-rpc.lua"),
 		scenario,
 	)
 	command.Stderr = &stderr

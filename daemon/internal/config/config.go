@@ -70,7 +70,8 @@ const (
 // PluginTransport is the transport the Lua plugin will read, which is the value
 // config.toml names or, with no such key, the plugin's own default. That default
 // is part of the plugin's source, so it is repeated here as TransportIPC — the
-// daemon/tests transport guards hold the two to each other.
+// transport guards beside the plugin, in statewatch's plugin contract test, hold
+// the two to each other.
 func (c Config) PluginTransport() string {
 	if c.TransportFromFile == "" {
 		return TransportIPC

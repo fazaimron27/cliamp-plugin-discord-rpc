@@ -1,4 +1,4 @@
-package tests
+package discord_test
 
 import (
 	"context"

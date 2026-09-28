@@ -1,4 +1,4 @@
-package tests
+package statewatch_test
 
 import (
 	"encoding/json"
@@ -51,7 +51,7 @@ func runPlugin(t *testing.T, transport string) []pluginRecord {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := filepath.Abs(filepath.Join("..", "..", "discord-rpc.lua"))
+	plugin, err := filepath.Abs(filepath.Join("..", "..", "..", "discord-rpc.lua"))
 	if err != nil {
 		t.Fatal(err)
 	}
