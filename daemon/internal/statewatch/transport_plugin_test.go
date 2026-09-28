@@ -1,6 +1,8 @@
-package tests
+package statewatch_test
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,9 +23,17 @@ import (
 // appears.
 
 // pluginSource reads the plugin file, which is also a release archive member.
+// The repository root is three levels above this package: Go runs a test binary
+// with its working directory set to the package directory, and the plugin sits
+// at the root rather than in any Go package, so the path is spelled out here
+// instead of shared with the other tests that read repository files.
 func pluginSource(t *testing.T) string {
 	t.Helper()
-	return repoFile(t, "discord-rpc.lua")
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "discord-rpc.lua"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 // pluginConstant extracts a Lua constant by pattern, failing when the pattern

@@ -9,11 +9,11 @@ import (
 )
 
 // TestLastFMForgetsExpiredLookupsInsteadOfGrowingForever asserts on what the
-// resolver retains, which is why it lives in the package rather than beside the
-// resolver's black-box tests: unbounded growth is a property of the memory held,
-// and nothing in the public API reports that. Before this was guarded, both
-// lookup maps were written for the daemon's lifetime and never pruned, so a
-// track that failed once held an entry until the process exited.
+// resolver retains, which is why it is written inside the package rather than
+// in the external test package beside it: unbounded growth is a property of the
+// memory held, and nothing in the public API reports that. Before this was
+// guarded, both lookup maps were written for the daemon's lifetime and never
+// pruned, so a track that failed once held an entry until the process exited.
 func TestLastFMForgetsExpiredLookupsInsteadOfGrowingForever(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"track":{"album":{"image":[{"#text":"https://img/large.jpg"}]}}}`))

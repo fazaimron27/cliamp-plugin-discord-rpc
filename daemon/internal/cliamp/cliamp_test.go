@@ -1,4 +1,4 @@
-package tests
+package cliamp_test
 
 import (
 	"bufio"

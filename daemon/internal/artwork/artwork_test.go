@@ -1,4 +1,4 @@
-package tests
+package artwork_test
 
 import (
 	"context"

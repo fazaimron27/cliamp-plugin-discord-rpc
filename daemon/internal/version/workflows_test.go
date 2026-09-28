@@ -1,4 +1,4 @@
-package tests
+package version_test
 
 import (
 	"path/filepath"
@@ -23,7 +23,7 @@ var runnerLine = regexp.MustCompile(`(?m)^\s*runs-on:\s*([^\s#]+)\s*(?:#.*)?$`)
 // tested against, which holds only while nothing quietly puts the floating label
 // back.
 func TestWorkflowRunnersNameTheirImage(t *testing.T) {
-	workflows, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	workflows, err := filepath.Glob(filepath.Join("..", "..", "..", ".github", "workflows", "*.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}

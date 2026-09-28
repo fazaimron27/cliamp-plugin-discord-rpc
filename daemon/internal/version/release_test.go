@@ -1,4 +1,4 @@
-package tests
+package version_test
 
 import (
 	"os"
@@ -11,11 +11,11 @@ import (
 )
 
 // repoFile reads a file from the repository root. Go runs a test binary with its
-// working directory set to the package directory, so the root is two levels
+// working directory set to the package directory, so the root is three levels
 // above this package.
 func repoFile(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", name))
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", name))
 	if err != nil {
 		t.Fatal(err)
 	}

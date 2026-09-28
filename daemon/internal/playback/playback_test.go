@@ -1,4 +1,4 @@
-package tests
+package playback_test
 
 import (
 	"strings"

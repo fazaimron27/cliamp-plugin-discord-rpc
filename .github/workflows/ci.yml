@@ -14,7 +14,7 @@ jobs:
     name: Test, vet, and build
     # Pinned to a dated image: ubuntu-latest moved to Ubuntu 26.04 from
     # 2026-10-19, so the floating label would change this job's OS without a
-    # commit here. See daemon/tests/workflows_test.go.
+    # commit here. See daemon/internal/version/workflows_test.go.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -43,9 +43,10 @@ jobs:
       - name: Check shell scripts
         run: shellcheck -s sh install.sh uninstall.sh
 
-      # Only the shipped plugin is linted. The Lua test fixtures under
-      # daemon/tests/testdata are exercised by the contract tests, which run
-      # them under luajit, so a syntax error there fails the suite anyway.
+      # Only the shipped plugin is linted. The Lua test fixtures under the
+      # playback and statewatch testdata directories are exercised by the
+      # contract tests, which run them under luajit, so a syntax error there
+      # fails the suite anyway.
       - name: Check Lua plugin
         run: luacheck discord-rpc.lua
 
