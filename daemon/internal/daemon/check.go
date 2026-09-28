@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -150,10 +151,23 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		line("ok", "last.fm", "the API key was accepted")
 	}
 
-	if _, err := os.Stat(cfg.CliampConfig); err == nil {
-		line("ok", "config", cfg.CliampConfig)
+	// The question is whether the daemon can use this file, which is not what
+	// os.Stat answers: a directory stat succeeds while being no config file at
+	// all, so the probe used to report `ok` for a path that contributes nothing.
+	// Reading it is what Load does, so reading it is what this reports on.
+	//
+	// An unusable config is still not a hard failure. The built-in defaults are
+	// a working configuration, so this warns and the exit code stays 0.
+	if _, err := os.ReadFile(cfg.CliampConfig); err != nil {
+		// The path is already on this line, so report the reason alone rather
+		// than the PathError's restatement of it.
+		var pathError *os.PathError
+		if errors.As(err, &pathError) {
+			err = pathError.Err
+		}
+		line("warn", "config", fmt.Sprintf("%s is not readable, using defaults: %v", cfg.CliampConfig, err))
 	} else {
-		line("warn", "config", fmt.Sprintf("%s is not readable, using defaults", cfg.CliampConfig))
+		line("ok", "config", cfg.CliampConfig)
 	}
 
 	return code
