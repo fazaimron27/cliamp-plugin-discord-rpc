@@ -10,9 +10,11 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
-const userAgent = "cliamp-rpcd/1.6.1"
+const userAgent = "cliamp-rpcd/" + version.Number
 
 const (
 	maxResponseSize = 1 << 20

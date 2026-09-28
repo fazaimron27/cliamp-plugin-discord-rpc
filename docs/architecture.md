@@ -37,6 +37,15 @@ impersonate another plugin. Each payload is a complete playback snapshot:
 - `duration` and `position` in whole seconds
 - `stream`
 - `path`, used only as private local track identity
+- `plugin_version`, the release that published the snapshot, used only to report
+  a mismatched plugin/daemon pairing
+
+The daemon logs a warning once per distinct `plugin_version` whose major.minor
+line differs from its own, then keeps running. A patch difference is silent: it
+cannot change this payload, so there is nothing for the user to act on. A plugin
+old enough to omit the field predates the report and is not warned about. The
+daemon's own release identity lives in `daemon/internal/version`, which the
+`--version` flag, the startup log, and the Last.fm `User-Agent` all read.
 
 The subscription request must carry Cliamp's version 2 IPC envelope. Cliamp
 rejects an unversioned frame with a structured `invalid_version` error instead

@@ -50,6 +50,35 @@ func TestPlaybackPresenceKeyTracksStreamFlag(t *testing.T) {
 	}
 }
 
+func TestPlaybackAcceptsPluginVersion(t *testing.T) {
+	valid := playback.State{Status: "playing", Title: "Track", PluginVersion: "1.6.1"}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// A plugin old enough to omit the field must still validate.
+	if err := (playback.State{Status: "playing", Title: "Track"}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	invalid := []playback.State{
+		{Status: "playing", Title: "Track", PluginVersion: strings.Repeat("x", 33)},
+		{Status: "playing", Title: "Track", PluginVersion: "bad\x00version"},
+	}
+	for _, state := range invalid {
+		if err := state.Validate(); err == nil {
+			t.Fatalf("Validate(%#v) succeeded", state)
+		}
+	}
+}
+
+func TestPlaybackPresenceKeyIgnoresPluginVersion(t *testing.T) {
+	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Duration: 200, StartedAt: 900}
+	want := state.PresenceKey()
+	state.PluginVersion = "1.7.0"
+	if got := state.PresenceKey(); got != want {
+		t.Fatalf("plugin version changed presence key: %q != %q", got, want)
+	}
+}
+
 func TestPlaybackValidation(t *testing.T) {
 	valid := playback.State{Status: "playing", Title: "Track", Duration: 10, Position: 2, Year: 2020}
 	if err := valid.Validate(); err != nil {

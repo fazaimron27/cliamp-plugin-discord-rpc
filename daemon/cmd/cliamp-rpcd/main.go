@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/daemon"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
 func main() {
@@ -20,6 +22,10 @@ func main() {
 			return
 		}
 		log.Fatal(err)
+	}
+	if cfg.ShowVersion {
+		fmt.Println(version.Number)
+		return
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

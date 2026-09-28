@@ -75,6 +75,24 @@ func TestConfigCommandLineOverridesEnvironment(t *testing.T) {
 	}
 }
 
+func TestConfigVersionFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := config.Load([]string{"--version"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ShowVersion {
+		t.Fatal("--version did not request the version")
+	}
+	off, err := config.Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.ShowVersion {
+		t.Fatal("version requested without the flag")
+	}
+}
+
 func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "secret-app-id")
@@ -100,7 +118,7 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 
 	help := string(output)
-	for _, option := range []string{"--app-id", "--config", "--large-image", "--large-text", "--socket"} {
+	for _, option := range []string{"--app-id", "--config", "--large-image", "--large-text", "--socket", "--version"} {
 		if !strings.Contains(help, option) {
 			t.Errorf("help does not contain %q:\n%s", option, help)
 		}
@@ -110,5 +128,9 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 	if strings.Contains(help, "secret-app-id") {
 		t.Errorf("help exposes application ID:\n%s", help)
+	}
+	// A boolean flag's zero value is not a useful default to print.
+	if strings.Contains(help, `(default "false")`) || strings.Contains(help, `(default "true")`) {
+		t.Errorf("help shows a boolean default:\n%s", help)
 	}
 }
