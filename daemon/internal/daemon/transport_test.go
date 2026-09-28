@@ -107,7 +107,7 @@ func TestRunPublishesWhatTheStateFileSays(t *testing.T) {
 	client := &fakeDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now) }()
+	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now, presenceRefresh) }()
 
 	// The document is the whole transport: no socket, no subscription, and the
 	// presence has to come from what the file says.
@@ -126,7 +126,7 @@ func TestRunClearsPresenceWhenTheDocumentIsRemoved(t *testing.T) {
 	client := &recordingDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now) }()
+	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now, presenceRefresh) }()
 
 	client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "From the file"
@@ -170,7 +170,7 @@ func TestRunIgnoresAHeartbeatOnlyRewrite(t *testing.T) {
 	client := &fakeDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now) }()
+	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now, presenceRefresh) }()
 
 	client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "Long track"
