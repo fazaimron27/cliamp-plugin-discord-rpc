@@ -102,7 +102,9 @@ cliamp-plugin-discord-rpc/
 - `daemon/internal/discord` implements socket discovery, framing, handshake,
   and `SET_ACTIVITY` over Discord IPC.
 - `daemon/internal/daemon` coordinates subscriptions, artwork, timelines,
-  reconnects, refreshes, and activity clearing.
+  reconnects, refreshes, and activity clearing. It also owns the `--check`
+  diagnostic, which probes the same transports in isolation and reports them
+  without starting the run loop.
 
 ## Playback Behavior
 

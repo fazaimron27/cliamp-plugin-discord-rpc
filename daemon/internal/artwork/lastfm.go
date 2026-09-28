@@ -4,6 +4,7 @@ package artwork
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -128,4 +129,58 @@ func (r *LastFM) Resolve(ctx context.Context, artist, title string) (string, err
 func (r *LastFM) failed(key string, err error) error {
 	r.failures[key] = r.now().Add(failureRetry)
 	return err
+}
+
+// probeArtist and probeTrack identify the track Validate asks Last.fm about. Any
+// track with a populated record works: the question being answered is whether
+// the API accepts the key, which it settles before looking the track up.
+const (
+	probeArtist = "Cher"
+	probeTrack  = "Believe"
+)
+
+// Validate performs one request and reports whether Last.fm accepts the
+// configured API key. A missing key is the caller's concern, not this method's.
+//
+// This is a probe rather than a lookup, so it deliberately bypasses the artwork
+// cache and the failure backoff. A diagnostic has to report the state of the
+// key, not the state of the cache.
+func (r *LastFM) Validate(ctx context.Context) error {
+	query := url.Values{
+		"method":  {"track.getInfo"},
+		"api_key": {r.apiKey},
+		"artist":  {probeArtist},
+		"track":   {probeTrack},
+		"format":  {"json"},
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return errors.New("build Last.fm request")
+	}
+	request.Header.Set("User-Agent", userAgent)
+	response, err := r.client.Do(request)
+	if err != nil {
+		// Deliberately not wrapping the transport error: it embeds the request
+		// URL, which carries the API key.
+		return errors.New("Last.fm request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("Last.fm returned HTTP %s", response.Status)
+	}
+
+	// A rejected key arrives as an error object inside an HTTP 200 response, so
+	// the body is the only place the rejection is visible. Resolve cannot see
+	// this, which is why it cannot tell a bad key from a track with no artwork.
+	var result struct {
+		Error   int    `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseSize)).Decode(&result); err != nil {
+		return fmt.Errorf("decode Last.fm response: %w", err)
+	}
+	if result.Error != 0 {
+		return fmt.Errorf("Last.fm rejected the API key: %s (code %d)", result.Message, result.Error)
+	}
+	return nil
 }

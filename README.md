@@ -227,10 +227,11 @@ Keep this terminal open while using the daemon and press `Ctrl+C` to stop it.
 Pausing or stopping playback clears the activity, and the daemon reconnects
 automatically if Discord is started or restarted later.
 
-Run `~/.local/bin/cliamp-rpcd --help` for all daemon options, or
-`~/.local/bin/cliamp-rpcd --version` to print the release and exit. The daemon
-subscribes to `plugin.discord-rpc.playback` on Cliamp's owner-only local IPC
-socket and reconnects automatically when Cliamp restarts.
+Run `~/.local/bin/cliamp-rpcd --help` for all daemon options,
+`~/.local/bin/cliamp-rpcd --version` to print the release and exit, or
+`~/.local/bin/cliamp-rpcd --check` to probe the environment before starting.
+The daemon subscribes to `plugin.discord-rpc.playback` on Cliamp's owner-only
+local IPC socket and reconnects automatically when Cliamp restarts.
 
 If the daemon logs a warning that the plugin and daemon versions do not match,
 the two halves came from different release lines. The warning names the half that
@@ -310,6 +311,36 @@ Command-line and environment overrides are also supported; run
 `cliamp-rpcd --help` for details.
 
 ## Troubleshooting
+
+Start with the built-in diagnostic. It probes each transport for real and reports
+what it found:
+
+```sh
+~/.local/bin/cliamp-rpcd --check
+```
+
+```text
+cliamp-rpcd 1.7.1
+
+cliamp    ok    subscribed to plugin.discord-rpc.playback at /home/faza/.config/cliamp/cliamp.sock
+plugin    ok    plugin v1.7.1 matches this daemon
+discord   fail  Discord IPC unavailable: dial unix /run/user/1000/discord-ipc-0: connect: no such file or directory
+last.fm   ok    the API key was accepted
+config    ok    /home/faza/.config/cliamp/config.toml
+```
+
+The line above is the Discord-absent case, which the first entry below covers.
+`--check` exits with status 1 when Cliamp or Discord is unreachable, so it can
+gate a start:
+
+```sh
+cliamp-rpcd --check && systemctl --user start cliamp-rpcd.service
+```
+
+Artwork and plugin-version lines report `warn` without failing the command,
+because the daemon runs without artwork and treats version skew as a warning
+rather than an error. It makes exactly one connection to each half and never
+publishes an activity, so running it does not disturb your Discord presence.
 
 ### Discord activity does not appear
 

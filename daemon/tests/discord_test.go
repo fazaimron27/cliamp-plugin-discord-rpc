@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
@@ -75,6 +77,47 @@ func TestDiscordClientHandshakeAndActivity(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Discord answers one handshake and then goes quiet for a while, so a second
+// connection attempt fails at the socket Discord actually published. Connect
+// walks a list of candidates and used to report whichever it tried last, which
+// is a path that never existed, hiding the socket that refused us.
+func TestDiscordConnectNamesTheSocketThatRefusedIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	// Empty the other search roots so the only candidate that exists is the one
+	// this test listens on.
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("TMP", t.TempDir())
+	t.Setenv("TEMP", t.TempDir())
+
+	socket := filepath.Join(dir, "discord-ipc-0")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		// Accepting and then going silent stands in for Discord once it has seen
+		// enough handshakes, without depending on how long Discord waits.
+		<-time.After(50 * time.Millisecond)
+		_ = conn.Close()
+	}()
+
+	client := discord.NewClient("123")
+	err = client.Connect(context.Background())
+	if err == nil {
+		t.Fatal("Connect() succeeded against a socket that never answered the handshake")
+	}
+	if !strings.Contains(err.Error(), socket) {
+		t.Fatalf("error does not name the socket that refused us: %v", err)
 	}
 }
 

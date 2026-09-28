@@ -93,6 +93,29 @@ func TestConfigVersionFlag(t *testing.T) {
 	}
 }
 
+func TestConfigCheckFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := config.Load([]string{"--check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ShowCheck {
+		t.Fatal("--check did not request the diagnostic")
+	}
+	// --check and --version are separate modes: asking for one must not trigger
+	// the other, or `--version` would start probing the environment.
+	if cfg.ShowVersion {
+		t.Fatal("--check also requested the version")
+	}
+	off, err := config.Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.ShowCheck || off.ShowVersion {
+		t.Fatal("a mode was requested without its flag")
+	}
+}
+
 func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "secret-app-id")
@@ -118,7 +141,7 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 
 	help := string(output)
-	for _, option := range []string{"--app-id", "--config", "--large-image", "--large-text", "--socket", "--version"} {
+	for _, option := range []string{"--app-id", "--check", "--config", "--large-image", "--large-text", "--socket", "--version"} {
 		if !strings.Contains(help, option) {
 			t.Errorf("help does not contain %q:\n%s", option, help)
 		}

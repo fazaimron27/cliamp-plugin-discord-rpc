@@ -23,13 +23,20 @@ func main() {
 		}
 		log.Fatal(err)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if cfg.ShowVersion {
 		fmt.Println(version.Number)
 		return
 	}
+	if cfg.ShowCheck {
+		// os.Exit skips deferred calls, so stop the signal handler explicitly.
+		code := daemon.Check(ctx, cfg)
+		stop()
+		os.Exit(code)
+	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := daemon.Run(ctx, cfg); err != nil {
 		log.Fatal(err)
 	}
