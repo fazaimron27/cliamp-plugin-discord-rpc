@@ -6,7 +6,7 @@
 -- Single source of truth for this plugin's release. The manifest and every
 -- published snapshot must agree, and cliamp-rpcd warns when its own release
 -- line differs from the value published here.
-local VERSION = "1.6.1"
+local VERSION = "1.7.0"
 
 local p = plugin.register({
   name = "discord-rpc",
