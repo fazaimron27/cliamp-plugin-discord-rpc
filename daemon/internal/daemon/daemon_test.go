@@ -172,7 +172,12 @@ func TestVersionWatchReportsMismatchOnce(t *testing.T) {
 }
 
 func TestVersionWatchStaysQuietForCompatiblePlugins(t *testing.T) {
-	for _, pluginVersion := range []string{"1.6.1", "1.6.0", "", "dev"} {
+	// Derived from the daemon's own release rather than hardcoded, so a version
+	// bump cannot leave this fixture asserting a stale pairing. A plugin on the
+	// same release line, one carrying a pre-release suffix, one that omits the
+	// field, and one that sends junk must all stay quiet.
+	compatible := []string{version.Number, version.Number + "-dev.1", "", "dev"}
+	for _, pluginVersion := range compatible {
 		var watch versionWatch
 		if warning := watch.observe(pluginVersion); warning != "" {
 			t.Fatalf("observe(%q) = %q, want no warning", pluginVersion, warning)
