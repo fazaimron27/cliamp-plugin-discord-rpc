@@ -39,32 +39,50 @@ func (c *Client) Connect(ctx context.Context) error {
 	if c.conn != nil {
 		return nil
 	}
-	var lastErr error
+	// Two failures are kept apart because they call for different fixes. A
+	// candidate that was never there says Discord is not running; a candidate
+	// that accepted the connection and then refused the handshake says Discord
+	// is running but would not talk to us. Only the second one is reported when
+	// both occur, because it is the one that explains the outcome.
+	var absentErr, refusedErr error
 	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
 	for _, path := range SocketPaths() {
 		conn, err := dialer.DialContext(ctx, "unix", path)
 		if err != nil {
-			lastErr = err
+			// SocketPaths is ordered, so the first candidate is the one Discord
+			// would have published. Naming a later one reports a path that was
+			// never plausible to begin with.
+			if absentErr == nil {
+				absentErr = err
+			}
 			continue
 		}
 		if err := verifyPeer(conn); err != nil {
-			lastErr = err
+			if refusedErr == nil {
+				refusedErr = fmt.Errorf("%s: %w", path, err)
+			}
 			_ = conn.Close()
 			continue
 		}
 		c.conn = conn
 		if err := c.handshake(); err != nil {
-			lastErr = err
+			if refusedErr == nil {
+				refusedErr = fmt.Errorf("%s: %w", path, err)
+			}
 			_ = c.Close()
 			continue
 		}
 		log.Printf("connected to Discord at %s", path)
 		return nil
 	}
-	if lastErr == nil {
-		lastErr = errors.New("no Discord IPC socket candidates")
+	switch {
+	case refusedErr != nil:
+		return fmt.Errorf("Discord IPC unavailable: %w", refusedErr)
+	case absentErr != nil:
+		return fmt.Errorf("Discord IPC unavailable: %w", absentErr)
+	default:
+		return errors.New("Discord IPC unavailable: no Discord IPC socket candidates")
 	}
-	return fmt.Errorf("Discord IPC unavailable: %w", lastErr)
 }
 
 func (c *Client) SetActivity(activity *presence.Activity) error {
