@@ -120,9 +120,13 @@ bounded backoff and receives retained state when Cliamp is available again.
 
 ## Artwork
 
-The daemon calls Last.fm `track.getInfo` with artist and title, selects the
-largest valid HTTPS image, and caches both hits and misses for its lifetime. A
-missing API key, failed lookup, or absent image falls back to the Discord
+The daemon calls Last.fm `track.getInfo` with artist and title and selects the
+largest valid HTTPS image. What a lookup found is remembered with an expiry: a
+resolved URL is reused for an hour, while an answer carrying no image is retried
+after 30 seconds. A track's artwork does not change while it plays, but whether
+Last.fm could supply it can, so a transient miss outlives nothing and the
+resolver does not accumulate a lookup for every track the daemon has ever seen.
+A missing API key, failed lookup, or absent image falls back to the Discord
 application asset configured by `--large-image`.
 
 The community-maintained default Discord application ID is used unless a custom

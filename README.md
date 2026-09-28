@@ -357,6 +357,8 @@ publishes an activity, so running it does not disturb your Discord presence.
 - Confirm Last.fm has artwork for that artist and track.
 - Wait for the Discord asset named `cliamp` to finish processing; it is the
   fallback when Last.fm has no image.
+- A lookup that fails is retried while the track plays, so a network blip
+  resolves itself without restarting anything.
 
 ### Cliamp rejects the subscription or plugin publishing fails
 
