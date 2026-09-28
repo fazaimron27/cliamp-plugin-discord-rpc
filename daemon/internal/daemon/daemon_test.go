@@ -44,11 +44,11 @@ func (b *syncBuffer) String() string {
 type fakeDiscord struct {
 	mu         sync.Mutex
 	activities []presence.Activity
+	clearCalls int
 }
 
 func (f *fakeDiscord) Connected() bool               { return true }
 func (f *fakeDiscord) Connect(context.Context) error { return nil }
-func (f *fakeDiscord) ClearActivity() error          { return nil }
 func (f *fakeDiscord) Close() error                  { return nil }
 
 func (f *fakeDiscord) SetActivity(activity *presence.Activity) error {
@@ -58,10 +58,45 @@ func (f *fakeDiscord) SetActivity(activity *presence.Activity) error {
 	return nil
 }
 
+func (f *fakeDiscord) ClearActivity() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearCalls++
+	return nil
+}
+
+// snapshot returns the published activities, oldest first. A copy, because the
+// daemon appends to the real slice from its own goroutine.
+func (f *fakeDiscord) snapshot() []presence.Activity {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]presence.Activity(nil), f.activities...)
+}
+
 func (f *fakeDiscord) published() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.activities)
+}
+
+func (f *fakeDiscord) cleared() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.clearCalls
+}
+
+// waitFor polls until the condition holds. The daemon publishes from its own
+// goroutine, so every observation of it has to wait rather than assert.
+func waitFor(t *testing.T, what string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }
 
 type noArtwork struct{}
@@ -130,7 +165,9 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	client := &fakeDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now) }()
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, presenceRefresh)
+	}()
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(logs.String(), "does not match daemon") {
@@ -294,5 +331,288 @@ func TestTimelineTrackerUsesObservationFallback(t *testing.T) {
 	state := tracker.Accept(playback.State{Status: "playing", Title: "Track", Duration: 100, Position: 25})
 	if state.ObservedAt != 1000 || state.StartedAt != 975 {
 		t.Fatalf("state = %#v", state)
+	}
+}
+
+// cliampSession is a Cliamp IPC peer a test can publish snapshots through. The
+// daemon subscribes to it exactly as it subscribes to the real plugin, and stays
+// subscribed for as long as the test runs.
+type cliampSession struct {
+	snapshots chan map[string]any
+	done      chan struct{}
+}
+
+func serveCliampSession(t *testing.T, socket string) *cliampSession {
+	t.Helper()
+	session := &cliampSession{
+		// Buffered, with room for more than these tests send: the daemon reads
+		// the stream from its own goroutine, which is exactly what a test may be
+		// holding up.
+		snapshots: make(chan map[string]any, 16),
+		done:      make(chan struct{}),
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		close(session.done)
+		_ = listener.Close()
+	})
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		if !scanner.Scan() {
+			return
+		}
+		ack, err := json.Marshal(map[string]any{"version": 2, "id": "discord-rpc-subscribe", "ok": true})
+		if err != nil {
+			return
+		}
+		if _, err := conn.Write(append(ack, '\n')); err != nil {
+			return
+		}
+		for {
+			select {
+			case <-session.done:
+				return
+			case snapshot := <-session.snapshots:
+				event, err := json.Marshal(map[string]any{
+					"event": cliampipc.PlaybackTopic,
+					"time":  1000,
+					"data":  snapshot,
+				})
+				if err != nil {
+					return
+				}
+				if _, err := conn.Write(append(event, '\n')); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return session
+}
+
+// publish sends a snapshot to the daemon as the plugin would.
+func (s *cliampSession) publish(t *testing.T, snapshot map[string]any) {
+	t.Helper()
+	select {
+	case s.snapshots <- snapshot:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the daemon never accepted a snapshot")
+	}
+}
+
+// playingSnapshot and stoppedSnapshot are the two events these tests publish.
+// The version is the daemon's own so nothing but the playback state varies.
+func playingSnapshot(title string) map[string]any {
+	return map[string]any{
+		"status": "playing", "title": title, "artist": "Artist",
+		"duration": 200, "position": 10, "plugin_version": version.Number,
+	}
+}
+
+func stoppedSnapshot(title string) map[string]any {
+	return map[string]any{
+		"status": "stopped", "title": title, "artist": "Artist",
+		"duration": 200, "position": 10, "plugin_version": version.Number,
+	}
+}
+
+// gatedArtwork holds every lookup until the test releases it, so a test can
+// observe what the daemon does while a request is still in flight. Releasing
+// answers with the supplied image.
+type gatedArtwork struct {
+	entered chan struct{}
+	release chan string
+}
+
+func newGatedArtwork() *gatedArtwork {
+	return &gatedArtwork{entered: make(chan struct{}, 8), release: make(chan string, 8)}
+}
+
+func (g *gatedArtwork) Resolve(ctx context.Context, _, _ string) (string, error) {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case image := <-g.release:
+		return image, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// awaitLookup fails the test unless a lookup starts, which is what makes the
+// rest of the test meaningful: there is only a stall to observe once a request
+// is open.
+func (g *gatedArtwork) awaitLookup(t *testing.T) {
+	t.Helper()
+	select {
+	case <-g.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the daemon never asked Last.fm for artwork")
+	}
+}
+
+// startDaemon runs the loop against a session and a resolver, and returns the
+// Discord fake it publishes to. Production passes presenceRefresh; a test that
+// needs the loop's timer to fire sooner passes its own interval.
+func startDaemon(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration) *fakeDiscord {
+	t.Helper()
+	client := &fakeDiscord{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, resolver, time.Now, refresh)
+	}()
+	return client
+}
+
+// countingArtwork answers every lookup with the same image, so a test can see how
+// many times the loop asked and change what it gets back.
+type countingArtwork struct {
+	mu       sync.Mutex
+	requests int
+	image    string
+}
+
+func (c *countingArtwork) Resolve(context.Context, string, string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests++
+	return c.image, nil
+}
+
+func (c *countingArtwork) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.requests
+}
+
+func (c *countingArtwork) answerWith(image string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.image = image
+}
+
+// Artwork is looked up over the network and the loop is the only thing that
+// talks to Discord, so a lookup it waits on delays every presence update behind
+// it. A track change must not queue behind the artwork of the track it replaced.
+func TestRunPublishesATrackChangeWhileALookupIsInFlight(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	artwork := newGatedArtwork()
+	client := startDaemon(t, socket, artwork, presenceRefresh)
+
+	session.publish(t, playingSnapshot("First"))
+	artwork.awaitLookup(t)
+
+	// The lookup for "First" is open and the fake will never answer it, so
+	// anything published from here on was published without waiting for it.
+	session.publish(t, playingSnapshot("Second"))
+	waitFor(t, "the second track to reach Discord", func() bool {
+		for _, activity := range client.snapshot() {
+			if activity.Details == "Second" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A stop has to reach Discord promptly for the same reason: presence that
+// lingers after playback ends is wrong for as long as the lookup takes.
+func TestRunClearsPresenceWhileALookupIsInFlight(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	artwork := newGatedArtwork()
+	client := startDaemon(t, socket, artwork, presenceRefresh)
+
+	session.publish(t, playingSnapshot("First"))
+	artwork.awaitLookup(t)
+
+	session.publish(t, stoppedSnapshot("First"))
+	waitFor(t, "the presence to clear", func() bool { return client.cleared() > 0 })
+}
+
+// The loop publishes as soon as it knows the track, then again when the artwork
+// lands. Showing the track immediately is the point of the change: the artwork
+// is an enhancement, and waiting for it is what stalled everything else.
+func TestRunRepublishesPresenceWhenTheArtworkArrives(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	artwork := newGatedArtwork()
+	client := startDaemon(t, socket, artwork, presenceRefresh)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the track to reach Discord", func() bool { return len(client.snapshot()) > 0 })
+
+	// Nothing has answered the lookup yet, so this activity was built without it.
+	if activity := client.snapshot()[0]; activity.Assets != nil {
+		t.Fatalf("presence carried artwork before the lookup answered: %#v", activity.Assets)
+	}
+
+	const image = "https://img/large.jpg"
+	artwork.release <- image
+	waitFor(t, "the artwork to reach Discord", func() bool {
+		for _, activity := range client.snapshot() {
+			if activity.Assets != nil && activity.Assets.LargeImage == image {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A lookup that comes back with nothing is not final. Artwork is an enhancement,
+// so one that is missing costs the track its picture rather than the session, and
+// the retry is what lets a track that failed once recover while it is still
+// playing — which is what the loop did before the lookup moved off it.
+func TestRunRetriesAnEmptyLookupOnTheNextRefresh(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	artwork := &countingArtwork{}
+	client := startDaemon(t, socket, artwork, 50*time.Millisecond)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the empty lookup to be retried", func() bool { return artwork.count() >= 2 })
+
+	artwork.answerWith("https://img/large.jpg")
+	waitFor(t, "the retry's artwork to reach Discord", func() bool {
+		for _, activity := range client.snapshot() {
+			if activity.Assets != nil && activity.Assets.LargeImage == "https://img/large.jpg" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// An answer must not be able to ask for itself: retrying from the reply would
+// re-ask as fast as the resolver answers, which for a hit on a cached miss is a
+// busy loop rather than a retry. Only the timer may retry, so with the timer set
+// an hour out nothing here can legitimately ask twice.
+func TestRunDoesNotAskAgainBecauseALookupCameBackEmpty(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	artwork := &countingArtwork{}
+	client := startDaemon(t, socket, artwork, time.Hour)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the track to reach Discord", func() bool { return len(client.snapshot()) > 0 })
+
+	if asked := artwork.count(); asked != 1 {
+		t.Fatalf("lookups = %d, want 1", asked)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if asked := artwork.count(); asked != 1 {
+		t.Fatalf("lookups = %d after settling, want 1: an answer asked for itself", asked)
 	}
 }
