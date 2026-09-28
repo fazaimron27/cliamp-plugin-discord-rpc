@@ -151,6 +151,88 @@ func TestConfigStatePathComesFromTheFileOrTheDefault(t *testing.T) {
 	})
 }
 
+// The plugin's side of the joint setting is not only what the file says: with
+// no key in the file the plugin uses its own default, and comparing against the
+// empty string would make restating that default look like a disagreement.
+func TestConfigComparesAgainstThePluginsEffectiveValue(t *testing.T) {
+	transportHome(t)
+
+	t.Run("the file names neither, and the daemon names the plugin's default", func(t *testing.T) {
+		cfg, err := config.Load([]string{"--transport", config.TransportIPC})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.PluginTransport() != config.TransportIPC {
+			t.Fatalf("plugin transport = %q, want the plugin's own default", cfg.PluginTransport())
+		}
+		if cfg.TransportDisagreesWithPlugin() {
+			t.Fatalf("an explicit %q was reported as disagreeing with a plugin that defaults to it", config.TransportIPC)
+		}
+	})
+
+	t.Run("the file names neither, and the daemon asks for the file", func(t *testing.T) {
+		cfg, err := config.Load([]string{"--transport", config.TransportFile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.TransportDisagreesWithPlugin() {
+			t.Fatal("a plugin that defaults to ipc was reported as agreeing with a daemon reading the file")
+		}
+	})
+
+	t.Run("the file names one", func(t *testing.T) {
+		path := transportConfig(t, "transport = \"file\"\n")
+		cfg, err := config.Load([]string{"--config", path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.PluginTransport() != config.TransportFile {
+			t.Fatalf("plugin transport = %q, want the file's value", cfg.PluginTransport())
+		}
+	})
+}
+
+func TestConfigTransportWarningNamesBothHalves(t *testing.T) {
+	transportHome(t)
+	path := transportConfig(t, "transport = \"file\"\n")
+
+	t.Run("an override the plugin cannot see is explained", func(t *testing.T) {
+		cfg, err := config.Load([]string{"--config", path, "--transport", config.TransportIPC})
+		if err != nil {
+			t.Fatal(err)
+		}
+		warning := cfg.TransportWarning()
+		if warning == "" {
+			t.Fatal("no warning for a transport the plugin cannot see")
+		}
+		// Naming all three is the point: what this daemon is reading, what the
+		// plugin will read, and where each came from. A warning that names one
+		// side leaves the user guessing which to change.
+		for _, want := range []string{cfg.Transport, cfg.TransportSource, cfg.PluginTransport()} {
+			if !strings.Contains(warning, want) {
+				t.Errorf("warning does not name %q: %s", want, warning)
+			}
+		}
+	})
+
+	t.Run("halves that agree say nothing", func(t *testing.T) {
+		cfg, err := config.Load([]string{"--config", path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if warning := cfg.TransportWarning(); warning != "" {
+			t.Fatalf("warning = %q, want none when both halves read the file", warning)
+		}
+		cfg, err = config.Load([]string{"--config", path, "--transport", config.TransportFile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if warning := cfg.TransportWarning(); warning != "" {
+			t.Fatalf("warning = %q, want none when the override restates the file", warning)
+		}
+	})
+}
+
 // The Lua plugin has no command line and no environment of its own: it can only
 // read config.toml through p:config(). So the halves agree unless this daemon
 // was overridden away from what the file says, which is what the provenance is

@@ -67,8 +67,19 @@ const (
 	SourceDefault     = "default"
 )
 
+// PluginTransport is the transport the Lua plugin will read, which is the value
+// config.toml names or, with no such key, the plugin's own default. That default
+// is part of the plugin's source, so it is repeated here as TransportIPC — the
+// daemon/tests transport guards hold the two to each other.
+func (c Config) PluginTransport() string {
+	if c.TransportFromFile == "" {
+		return TransportIPC
+	}
+	return c.TransportFromFile
+}
+
 // TransportDisagreesWithPlugin reports whether this daemon was pointed at a
-// transport other than the one config.toml names.
+// transport other than the one the plugin will use.
 //
 // The Lua plugin has no command line and no environment of its own: p:config()
 // reading config.toml is its only source, so an override here is the one way
@@ -79,7 +90,20 @@ func (c Config) TransportDisagreesWithPlugin() bool {
 	if c.TransportSource != SourceFlag && c.TransportSource != SourceEnvironment {
 		return false
 	}
-	return c.TransportFromFile != c.Transport
+	return c.PluginTransport() != c.Transport
+}
+
+// TransportWarning explains a transport override the plugin cannot see, or
+// returns "" when there is nothing to warn about. It names both halves, because
+// either of them could be the one to change.
+func (c Config) TransportWarning() string {
+	if !c.TransportDisagreesWithPlugin() {
+		return ""
+	}
+	return fmt.Sprintf(
+		"playback transport %s comes from the %s, but the plugin reads config.toml and will use %s: one of the two has to be changed to match",
+		c.Transport, c.TransportSource, c.PluginTransport(),
+	)
 }
 
 // Load parses command-line arguments, then fills credentials from environment
