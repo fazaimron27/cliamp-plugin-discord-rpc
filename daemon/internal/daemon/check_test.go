@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -234,5 +235,81 @@ func TestCheckStaysQuietOnAMatchingPluginLine(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "matches this daemon") {
 		t.Fatalf("a matching release line was not reported as a match:\n%s", out.String())
+	}
+}
+
+// configLine returns the report's config probe line. Assertions go through it so
+// that a bare "ok" from another probe cannot satisfy a test about this one.
+func configLine(t *testing.T, report string) string {
+	t.Helper()
+	for _, line := range strings.Split(report, "\n") {
+		if strings.HasPrefix(line, "config") {
+			return line
+		}
+	}
+	t.Fatalf("report has no config probe line:\n%s", report)
+	return ""
+}
+
+// The config probe answered "does this path exist", because os.Stat is what it
+// called. A directory answers that question successfully while being no config
+// file at all, so `--check` reported `config ok` for a path the daemon cannot
+// use, and the branch whose message says "is not readable" could only ever fire
+// when the path was missing outright.
+func TestCheckReportsWhetherTheConfigFileIsReadable(t *testing.T) {
+	dir := t.TempDir()
+	readable := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(readable, []byte("[plugins.discord-rpc]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(dir, "a-directory")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(dir, "unreadable.toml")
+	if err := os.WriteFile(unreadable, []byte("[plugins.discord-rpc]\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		path string
+		want string
+		// Running as root defeats the mode bits, so the premise of the
+		// unreadable case is checked rather than assumed.
+		needsUnreadable bool
+	}{
+		{name: "readable", path: readable, want: "ok"},
+		{name: "directory", path: directory, want: "warn"},
+		{name: "unreadable", path: unreadable, want: "warn", needsUnreadable: true},
+		{name: "missing", path: filepath.Join(dir, "absent.toml"), want: "warn"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.needsUnreadable {
+				if _, err := os.ReadFile(testCase.path); err == nil {
+					t.Skip("this process can read the file regardless of its mode, so there is nothing to probe")
+				}
+			}
+			socket := serveCheckCliamp(t, version.Number)
+			cfg := config.Config{
+				ApplicationID: config.DefaultApplicationID,
+				CliampSocket:  socket,
+				CliampConfig:  testCase.path,
+			}
+
+			var out bytes.Buffer
+			// A config the daemon cannot read is still not a hard failure: the
+			// built-in defaults are a working configuration, so the exit code
+			// must stay 0 while the line warns.
+			if code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out); code != 0 {
+				t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
+			}
+
+			line := configLine(t, out.String())
+			if !strings.Contains(line, testCase.want) {
+				t.Errorf("config probe reported %q, want %s for %s", line, testCase.want, testCase.path)
+			}
+		})
 	}
 }
