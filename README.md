@@ -13,23 +13,23 @@ client. Playback state is not written to disk.
 
 ## Compatibility
 
-The current `v1.7.1` release requires a Cliamp build that speaks IPC protocol
+The current `v1.8.0` release requires a Cliamp build that speaks IPC protocol
 version 2 and exposes the plugin event pub/sub API. Cliamp made version 2
 mandatory for its socket, so an older build answers the daemon's subscription
 with a structured `invalid_version` error. Use one of these combinations:
 
-- **v1.7.1 with a current Cliamp:** run any Cliamp build that includes the
+- **v1.8.0 with a current Cliamp:** run any Cliamp build that includes the
   version 2 IPC cutover ([`c75cdec`](https://github.com/bjarneo/cliamp/commit/c75cdec)),
-  then install this project's `v1.7.1` plugin and daemon.
+  then install this project's `v1.8.0` plugin and daemon.
 - **Older official Cliamp releases:** use this project's legacy
   [`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0),
   which transports playback through `rpc-state.json` and does not require the
   pub/sub API. Follow the [pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases)
   below.
 
-The Lua plugin and daemon must use the same release line: pair v1.7.1 with a
+The Lua plugin and daemon must use the same release line: pair v1.8.0 with a
 version 2 Cliamp, or v1.4.0 with an older official Cliamp release. The
-transports are intentionally incompatible. Do not install the v1.7.1 Lua plugin
+transports are intentionally incompatible. Do not install the v1.8.0 Lua plugin
 into a Cliamp build that lacks `p:publish()`; its event handlers will fail when
 they try to publish, and no playback events will reach the daemon. `v1.5.0` is
 superseded: its daemon sends the retired version 1 envelope and cannot subscribe
@@ -37,7 +37,7 @@ to a current Cliamp socket at all.
 
 ## Prerequisites
 
-Before installing v1.7.1, make sure you have:
+Before installing v1.8.0, make sure you have:
 
 - Git and Go 1.26.5 or newer to build Cliamp from its official `main` branch.
 - Cliamp built from the official
@@ -59,11 +59,11 @@ daemon uses the community-maintained Cliamp Discord application by default and
 displays its static artwork. Album artwork through Last.fm is an optional
 enhancement.
 
-## Install v1.7.1 from release
+## Install v1.8.0 from release
 
-Use this path for a normal v1.7.1 installation on `amd64` or `arm64` after
+Use this path for a normal v1.8.0 installation on `amd64` or `arm64` after
 installing Cliamp from its official `main` branch. It installs the plugin
-through Cliamp and downloads the published `v1.7.1` daemon; Go is not required
+through Cliamp and downloads the published `v1.8.0` daemon; Go is not required
 for the plugin or daemon.
 
 ### Build Cliamp main
@@ -88,7 +88,7 @@ resolves the new binary with `command -v cliamp`.
 ### Install the plugin
 
 ```sh
-cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.7.1
+cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.8.0
 cliamp plugins trust discord-rpc
 ```
 
@@ -100,13 +100,13 @@ shown by Cliamp before approving it. Restart Cliamp after installation.
 Install the daemon directly from this repository:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.7.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.8.0/install.sh | sh
 ```
 
 This command downloads code and executes it. To review the installer first:
 
 ```sh
-curl -fsSL -o install.sh https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.7.1/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.8.0/install.sh
 less install.sh
 sh install.sh
 rm install.sh
@@ -116,7 +116,7 @@ The installer:
 
 - Detects `amd64` or `arm64`.
 - Downloads the matching archive from the
-  [v1.7.1 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.7.1).
+  [v1.8.0 release](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.8.0).
 - Verifies the archive's GitHub Actions provenance attestation, bound to this repository's release workflow.
 - Verifies the archive against the published SHA-256 checksum.
 - Installs `cliamp-rpcd` to `~/.local/bin`.
@@ -132,7 +132,7 @@ first and pass options to it. Run `sh install.sh --help` for details.
 To remove only the daemon and service later:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.7.1/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.8.0/uninstall.sh | sh
 ```
 
 To review the uninstaller first, download it with `curl -fsSL -o uninstall.sh`,
@@ -157,7 +157,7 @@ curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-r
 Restart Cliamp after trusting the plugin. If another `discord-rpc` version is
 already installed, remove it first with `cliamp plugins remove discord-rpc`.
 The v1.4.0 plugin and daemon use `rpc-state.json`; do not mix either component
-with v1.7.1.
+with v1.8.0.
 
 ## Self-deploy from source
 
@@ -168,7 +168,7 @@ not use the release installer.
 ### Build the daemon
 
 ```sh
-git clone --branch v1.7.1 --single-branch \
+git clone --branch v1.8.0 --single-branch \
   https://github.com/fazaimron27/cliamp-plugin-discord-rpc.git
 cd cliamp-plugin-discord-rpc
 go test ./...
@@ -215,7 +215,7 @@ A successful startup looks like this:
 
 ```text
 $ cliamp-rpcd
-2026/08/14 15:29:59 starting cliamp-rpcd 1.7.1 (Cliamp IPC: /home/faza/.config/cliamp/cliamp.sock)
+2026/08/14 15:29:59 starting cliamp-rpcd 1.8.0 (Cliamp IPC: /home/faza/.config/cliamp/cliamp.sock)
 2026/08/14 15:30:14 subscribed to Cliamp playback events
 2026/08/14 15:30:18 connected to Discord at /run/user/1000/discord-ipc-0
 ```
@@ -242,7 +242,7 @@ reference:
   names:
 
   ```sh
-  cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.7.1
+  cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.8.0
   ```
 
 - **The daemon is behind.** This is the usual state when you build the daemon
@@ -250,7 +250,7 @@ reference:
   the released daemon, then restart it:
 
   ```sh
-  curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.7.1/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.8.0/install.sh | sh
   ```
 
 Only the major and minor components are compared, so a patch difference stays
@@ -320,10 +320,10 @@ what it found:
 ```
 
 ```text
-cliamp-rpcd 1.7.1
+cliamp-rpcd 1.8.0
 
 cliamp    ok    subscribed to plugin.discord-rpc.playback at /home/faza/.config/cliamp/cliamp.sock
-plugin    ok    plugin v1.7.1 matches this daemon
+plugin    ok    plugin v1.8.0 matches this daemon
 discord   fail  Discord IPC unavailable: dial unix /run/user/1000/discord-ipc-0: connect: no such file or directory
 last.fm   ok    the API key was accepted
 config    ok    /home/faza/.config/cliamp/config.toml
@@ -360,7 +360,7 @@ publishes an activity, so running it does not disturb your Discord presence.
 
 ### Cliamp rejects the subscription or plugin publishing fails
 
-Version 1.7.1 requires Cliamp's version 2 IPC envelope and retained plugin event
+Version 1.8.0 requires Cliamp's version 2 IPC envelope and retained plugin event
 pub/sub API, both of which are on the official
 [`main`](https://github.com/bjarneo/cliamp/tree/main) branch. The daemon logs the
 exact rejection, so start with:
