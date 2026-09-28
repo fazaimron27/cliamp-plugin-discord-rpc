@@ -74,10 +74,17 @@ The event is retained in Cliamp memory. A daemon that starts after playback has
 begun receives the newest snapshot immediately. Retention is process-local and
 is never written to disk.
 
-Cliamp assigns a process-local event sequence and timestamp. The daemon uses the
-event timestamp and playback position to derive Discord's timeline. Snapshots
-whose positions match natural progression preserve the timeline; a track
-change, resume, or position jump creates a new anchor.
+Cliamp assigns a process-local event sequence and timestamp. The timestamp is
+**Unix seconds**: Cliamp publishes `time.Now().Unix()`, its own plugin docs show a
+ten-digit `time` in the sample frame, and nothing in Cliamp reads the field back —
+so the daemon is its only interpreter, and the unit is this side's assumption to
+keep rather than one it inherits. It matters because the daemon derives Discord's
+timeline from the event timestamp and the playback position: a frame that arrived
+in milliseconds would put the observation some 56,000 years ahead of the clock and
+re-anchor the progress bar on every snapshot, which is indistinguishable from the
+re-anchoring a real track change causes. Snapshots whose positions match natural
+progression preserve the timeline; a track change, resume, or position jump
+creates a new anchor.
 
 ## State File Contract
 
@@ -90,7 +97,9 @@ does, with two additions and one rule:
   playback fields do. It becomes the snapshot's observation time, which is what
   the timeline is derived from, so a document whose change time moved while the
   position stood still would re-anchor Discord's progress bar on a track that
-  had not moved.
+  had not moved. It is Unix seconds, the same unit as the pub/sub event
+  timestamp, because both land in the same observation time: the two transports
+  are interchangeable only while their clocks agree on that.
 - `heartbeat` is refreshed on a 15-second timer whether or not anything changed.
   The daemon never reads it as playback state. It is the liveness signal the
   subscription connection gives the `ipc` transport, standing in for a signal a
