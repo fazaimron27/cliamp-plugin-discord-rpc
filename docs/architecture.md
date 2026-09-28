@@ -222,3 +222,28 @@ Cliamp subscription failures also leave the daemon running. It reconnects with
 bounded backoff, clears stale Discord activity when the stream closes, and gets
 the retained snapshot after reconnecting. On SIGINT or SIGTERM, the daemon
 clears activity before closing Discord IPC.
+
+A frame the daemon cannot decode, and a snapshot it rejects as invalid, are each
+logged and dropped. A rejected snapshot is never republished, so Discord keeps
+showing the last good activity, and the log line is the only account of why
+presence stopped moving. Each discard names its own reason, because the two have
+different causes: an undecodable frame means the transport is broken, while a
+rejected snapshot means a complete frame carried values the daemon will not
+accept.
+
+## Testing
+
+The plugin is half the shipped surface and none of it is Go, so the payload
+contract above is enforced by running the real `discord-rpc.lua` against a stub
+of Cliamp's plugin API and holding what it publishes to `playback.State`. The
+harness is `daemon/tests/testdata/lua`, driven by
+`daemon/tests/lua_contract_test.go`, which asserts that the published keys are
+exactly the ones the daemon accepts, that nothing the daemon would reject is
+published, and that a scenario publishing nothing is caught rather than passing
+vacuously. A field renamed on either side of the Lua/Go boundary fails there.
+
+Those tests need `luajit` and skip without it, so a local `go test ./...` can
+pass with them unrun. CI installs `luajit` and sets `CLIAMP_REQUIRE_LUA`, which
+turns that skip into a failure, so the suite cannot pass by skipping there.
+`luacheck` lints the shipped plugin in the same job, configured by
+`.luacheckrc`.

@@ -17,6 +17,10 @@ jobs:
     # commit here. See daemon/tests/workflows_test.go.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      # The Lua contract tests skip when luajit is absent, which is right for a
+      # local run and wrong here: CI must fail rather than pass by skipping.
+      CLIAMP_REQUIRE_LUA: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
@@ -30,11 +34,20 @@ jobs:
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
 
-      - name: Check shell scripts
+      - name: Install lint tooling
         run: |
           sudo apt-get update
-          sudo apt-get install --yes shellcheck
-          shellcheck -s sh install.sh uninstall.sh
+          sudo apt-get install --yes build-essential shellcheck luajit luarocks
+          sudo luarocks install luacheck 1.2.0-1
+
+      - name: Check shell scripts
+        run: shellcheck -s sh install.sh uninstall.sh
+
+      # Only the shipped plugin is linted. The Lua test fixtures under
+      # daemon/tests/testdata are exercised by the contract tests, which run
+      # them under luajit, so a syntax error there fails the suite anyway.
+      - name: Check Lua plugin
+        run: luacheck discord-rpc.lua
 
       - name: Run tests
         run: go test -race ./...
