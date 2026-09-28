@@ -68,23 +68,30 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 			"v1.4.0":     true, // the sanctioned pinned-legacy installation
 			"v1.5.0":     true, // named in prose as superseded
 		}
-		// Only v-prefixed versions are scanned. The Go prerequisite lines ("Go
-		// 1.26.5 or newer") are version-shaped but are not this project's
-		// release, and this project never writes its own version unprefixed.
 		for _, found := range regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+`).FindAllString(source, -1) {
 			if !allowed[found] {
 				t.Errorf("README.md pins %s, which is neither the current release nor a sanctioned legacy reference", found)
 			}
 		}
-		// Two spots carry the version without the prefix, leaving the scan above
-		// blind to them. Anchor both positively: the sample startup log and the
-		// troubleshooting prose.
-		for _, anchor := range []string{
-			"starting cliamp-rpcd " + number,
-			"Version " + number,
-		} {
-			if !strings.Contains(source, anchor) {
-				t.Errorf("README.md does not contain %q", anchor)
+
+		// The documentation writes the release both ways: v1.7.1 in install
+		// commands and a bare 1.7.1 in sample output and prose. Scanning only the
+		// prefixed form leaves those bare ones to rot through a bump, so every
+		// version-shaped string is scanned and two shapes are exempted instead.
+		//
+		// A match inside a v-prefixed version is already covered by the loop
+		// above, and a Go version names the toolchain a contributor needs rather
+		// than this project's release.
+		bare := regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+		for _, loc := range bare.FindAllStringIndex(source, -1) {
+			found := source[loc[0]:loc[1]]
+			before := source[:loc[0]]
+			if strings.HasSuffix(before, "v") || strings.HasSuffix(before, "Go ") {
+				continue
+			}
+			if found != number {
+				line := 1 + strings.Count(before, "\n")
+				t.Errorf("README.md:%d pins %s, want %s", line, found, number)
 			}
 		}
 	})
