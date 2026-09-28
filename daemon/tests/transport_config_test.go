@@ -20,7 +20,6 @@ func transportHome(t *testing.T) string {
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
 	t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "")
 	t.Setenv("CLIAMP_DISCORD_TRANSPORT", "")
-	t.Setenv("CLIAMP_DISCORD_STATE", "")
 	return home
 }
 
@@ -123,11 +122,11 @@ func TestConfigStatePathDefaultsToTheLegacyLocation(t *testing.T) {
 	}
 }
 
-func TestConfigStatePathPrecedence(t *testing.T) {
-	transportHome(t)
-	path := transportConfig(t, "state_path = \"/tmp/from-toml.json\"\n")
+func TestConfigStatePathComesFromTheFileOrTheDefault(t *testing.T) {
+	home := transportHome(t)
 
 	t.Run("file overrides the default", func(t *testing.T) {
+		path := transportConfig(t, "state_path = \"/tmp/from-toml.json\"\n")
 		cfg, err := config.Load([]string{"--config", path})
 		if err != nil {
 			t.Fatal(err)
@@ -137,43 +136,88 @@ func TestConfigStatePathPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("environment overrides the file", func(t *testing.T) {
-		t.Setenv("CLIAMP_DISCORD_STATE", "/tmp/from-env.json")
-		cfg, err := config.Load([]string{"--config", path})
+	// No flag and no environment variable, unlike the transport: an override
+	// this side could only be made where the plugin cannot see it, and the
+	// daemon would watch a path nothing writes.
+	t.Run("home default", func(t *testing.T) {
+		cfg, err := config.Load(nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.StatePath != "/tmp/from-env.json" {
-			t.Fatalf("state path = %q", cfg.StatePath)
-		}
-	})
-
-	t.Run("command line overrides the environment", func(t *testing.T) {
-		t.Setenv("CLIAMP_DISCORD_STATE", "/tmp/from-env.json")
-		cfg, err := config.Load([]string{"--config", path, "--state", "/tmp/from-flag.json"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.StatePath != "/tmp/from-flag.json" {
-			t.Fatalf("state path = %q", cfg.StatePath)
+		want := filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json")
+		if cfg.StatePath != want {
+			t.Fatalf("state path = %q, want %q", cfg.StatePath, want)
 		}
 	})
 }
 
-// An explicitly empty value is treated as unset throughout this package, the
-// way --app-id already behaves, so an empty path falls through to the default
-// rather than failing a load the daemon can serve perfectly well.
-func TestConfigEmptyStatePathFallsThroughToTheDefault(t *testing.T) {
-	home := transportHome(t)
+// The Lua plugin has no command line and no environment of its own: it can only
+// read config.toml through p:config(). So the halves agree unless this daemon
+// was overridden away from what the file says, which is what the provenance is
+// recorded for.
+func TestConfigRecordsWhereTheTransportCameFrom(t *testing.T) {
+	transportHome(t)
+	path := transportConfig(t, "transport = \"file\"\n")
 
-	cfg, err := config.Load([]string{"--transport", config.TransportFile, "--state", ""})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json")
-	if cfg.StatePath != want {
-		t.Fatalf("state path = %q, want the default %q", cfg.StatePath, want)
-	}
+	t.Run("default", func(t *testing.T) {
+		cfg, err := config.Load(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TransportSource != config.SourceDefault {
+			t.Fatalf("source = %q, want %q", cfg.TransportSource, config.SourceDefault)
+		}
+		if cfg.TransportDisagreesWithPlugin() {
+			t.Fatal("the default was reported as disagreeing with the plugin")
+		}
+	})
+
+	t.Run("file", func(t *testing.T) {
+		cfg, err := config.Load([]string{"--config", path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TransportSource != config.SourceFile || cfg.TransportFromFile != config.TransportFile {
+			t.Fatalf("source = %q, file value = %q", cfg.TransportSource, cfg.TransportFromFile)
+		}
+		if cfg.TransportDisagreesWithPlugin() {
+			t.Fatal("a value taken from config.toml was reported as disagreeing with the plugin")
+		}
+	})
+
+	t.Run("environment away from the file", func(t *testing.T) {
+		t.Setenv("CLIAMP_DISCORD_TRANSPORT", config.TransportIPC)
+		cfg, err := config.Load([]string{"--config", path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TransportSource != config.SourceEnvironment || !cfg.TransportDisagreesWithPlugin() {
+			t.Fatalf("source = %q, disagrees = %v", cfg.TransportSource, cfg.TransportDisagreesWithPlugin())
+		}
+	})
+
+	t.Run("environment agreeing with the file", func(t *testing.T) {
+		t.Setenv("CLIAMP_DISCORD_TRANSPORT", config.TransportFile)
+		cfg, err := config.Load([]string{"--config", path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Restating the file's own value changes nothing for the plugin, so it
+		// must not warn.
+		if cfg.TransportDisagreesWithPlugin() {
+			t.Fatalf("source = %q, files = %q, chosen = %q", cfg.TransportSource, cfg.TransportFromFile, cfg.Transport)
+		}
+	})
+
+	t.Run("command line away from the file", func(t *testing.T) {
+		cfg, err := config.Load([]string{"--config", path, "--transport", config.TransportIPC})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TransportSource != config.SourceFlag || !cfg.TransportDisagreesWithPlugin() {
+			t.Fatalf("source = %q, disagrees = %v", cfg.TransportSource, cfg.TransportDisagreesWithPlugin())
+		}
+	})
 }
 
 func TestConfigMaxAgeDefaultsToTheLegacyWindow(t *testing.T) {
