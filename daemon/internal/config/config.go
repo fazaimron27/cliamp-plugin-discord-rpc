@@ -246,15 +246,55 @@ func readTOMLValue(path, wantedSection, wantedKey string) (string, error) {
 		if !found || strings.TrimSpace(key) != wantedKey {
 			continue
 		}
-		value = strings.TrimSpace(value)
-		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		value = trimTOMLComment(strings.TrimSpace(value))
+		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+			// A literal string takes its content verbatim, so it is unwrapped
+			// rather than unescaped. Handing it to strconv.Unquote would fail:
+			// Go reads '1234' as a rune literal, which TOML does not mean.
+			if value[0] == '\'' {
+				return value[1 : len(value)-1], nil
+			}
 			unquoted, err := strconv.Unquote(value)
 			if err != nil {
 				return "", fmt.Errorf("invalid %s value", wantedKey)
 			}
 			return unquoted, nil
 		}
-		return strings.TrimSpace(strings.SplitN(value, "#", 2)[0]), nil
+		return value, nil
 	}
 	return "", nil
+}
+
+// trimTOMLComment removes a trailing comment from a TOML value. TOML permits a #
+// inside both basic and literal strings, so a quoted value is scanned to its
+// closing quote and only an unquoted value is split at the first #.
+//
+// Stripping the comment before testing for quotes is what the caller depends on:
+// requiring a quote as the final character meant `app_id = "1" # note` fell
+// through as an unquoted value, kept its quotes, and failed the Discord
+// handshake with a configuration error that named neither the file nor the line.
+func trimTOMLComment(value string) string {
+	if value == "" || (value[0] != '"' && value[0] != '\'') {
+		if index := strings.IndexByte(value, '#'); index >= 0 {
+			return strings.TrimSpace(value[:index])
+		}
+		return value
+	}
+
+	quote := value[0]
+	for index := 1; index < len(value); index++ {
+		// A backslash escapes the next character inside a basic string. A
+		// literal string has no escapes, so a backslash closes nothing there
+		// and must not be allowed to skip over the closing quote.
+		if quote == '"' && value[index] == '\\' {
+			index++
+			continue
+		}
+		if value[index] == quote {
+			return value[:index+1]
+		}
+	}
+	// Unterminated. Returned as written so the ordinary unquoted path handles
+	// it rather than this function inventing a reason of its own.
+	return value
 }

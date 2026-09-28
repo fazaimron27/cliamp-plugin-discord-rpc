@@ -188,10 +188,21 @@ what stops that document from holding the card indefinitely.
 
 ## Artwork
 
-The daemon calls Last.fm `track.getInfo` with artist and title, selects the
-largest valid HTTPS image, and caches both hits and misses for its lifetime. A
-missing API key, failed lookup, or absent image falls back to the Discord
+The daemon calls Last.fm `track.getInfo` with artist and title and selects the
+largest valid HTTPS image. What a lookup found is remembered with an expiry: a
+resolved URL is reused for an hour, while an answer carrying no image is retried
+after 30 seconds. A track's artwork does not change while it plays, but whether
+Last.fm could supply it can, so a transient miss outlives nothing and the
+resolver does not accumulate a lookup for every track the daemon has ever seen.
+A missing API key, failed lookup, or absent image falls back to the Discord
 application asset configured by `--large-image`.
+
+Lookups run on their own goroutine, and the loop publishes a Listening activity
+as soon as it knows the track — with artwork when the answer is already in hand,
+and again when a lookup that was still open returns one. The loop is the only
+thing that talks to Discord, so a request it waited on would queue every pause,
+stop, and track change behind Last.fm for up to the client's four-second
+timeout.
 
 The community-maintained default Discord application ID is used unless a custom
 ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
