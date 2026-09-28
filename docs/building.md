@@ -39,7 +39,7 @@ covers that setting.
 ## Build the daemon
 
 ```sh
-git clone --branch v1.8.0 --single-branch \
+git clone --branch v1.9.0 --single-branch \
   https://github.com/fazaimron27/cliamp-plugin-discord-rpc.git
 cd cliamp-plugin-discord-rpc
 go test ./...
