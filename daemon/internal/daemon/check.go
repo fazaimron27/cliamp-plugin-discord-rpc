@@ -125,16 +125,15 @@ func pluginVersion(ctx context.Context, states <-chan playback.State) (string, s
 				return "warn", "the plugin published no version, so it predates the version report"
 			}
 			reported := normalize(state.PluginVersion)
-			switch version.Relate(reported, version.Number) {
-			case version.Same:
-				return "ok", fmt.Sprintf("plugin v%s matches this daemon", reported)
-			case version.PluginBehind:
-				return "warn", fmt.Sprintf("plugin v%s is older than daemon v%s, so the plugin is the half that is behind", reported, version.Number)
-			case version.DaemonBehind:
-				return "warn", fmt.Sprintf("plugin v%s is newer than daemon v%s, so the daemon is the half that is behind", reported, version.Number)
-			default:
-				return "warn", fmt.Sprintf("plugin v%s is not comparable to daemon v%s", reported, version.Number)
+			relation := version.Relate(reported, version.Number)
+			// The wording is the daemon's own; this only decides how loudly to
+			// report it. Skew warns exactly as the running daemon does, rather
+			// than failing a command the user may be gating a start on.
+			status := "warn"
+			if relation == version.Same {
+				status = "ok"
 			}
+			return status, version.Explain(relation, reported, version.Number)
 		case <-timer.C:
 			return "warn", "no retained snapshot, so the plugin version is unknown"
 		case <-ctx.Done():

@@ -57,19 +57,23 @@ func (w *versionWatch) observe(pluginVersion string) string {
 		return ""
 	}
 	w.reported = reported
-	switch version.Relate(reported, version.Number) {
+	relation := version.Relate(reported, version.Number)
+	// The sentence is the same one the --check report prints; only the remedy
+	// differs, because only this consumer knows when it is running.
+	explained := version.Explain(relation, reported, version.Number)
+	switch relation {
 	case version.PluginBehind:
 		return fmt.Sprintf(
-			"discord-rpc plugin v%s does not match daemon v%s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install %s@v%s",
-			reported, version.Number, repository, version.Number,
+			"discord-rpc %s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install %s@v%s",
+			explained, repository, version.Number,
 		)
 	case version.DaemonBehind:
 		// Naming the half that is behind matters here: this daemon is usually a
 		// source build running ahead of the installed plugin, and pointing that
 		// user at the plugin would have them downgrade the half that is current.
 		return fmt.Sprintf(
-			"discord-rpc plugin v%s is newer than daemon v%s, so the daemon is the half that is behind. Update cliamp-rpcd with: curl -fsSL %s%s/install.sh | sh (or rebuild from source), then restart it.",
-			reported, version.Number, rawBase, tag(reported),
+			"discord-rpc %s. Update cliamp-rpcd with: curl -fsSL %s%s/install.sh | sh (or rebuild from source), then restart it.",
+			explained, rawBase, tag(reported),
 		)
 	default:
 		return ""

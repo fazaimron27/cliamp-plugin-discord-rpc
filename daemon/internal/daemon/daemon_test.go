@@ -132,18 +132,21 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	t.Cleanup(cancel)
 	go func() { _ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now) }()
 
+	// The run loop logs the same sentence the --check report prints, so this
+	// asserts the shared wording rather than a private one.
+	expected := "discord-rpc " + version.Explain(version.PluginBehind, "1.4.0", version.Number)
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(logs.String(), "does not match daemon") {
+	for time.Now().Before(deadline) && !strings.Contains(logs.String(), expected) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	output := logs.String()
 	if !strings.Contains(output, "subscribed to Cliamp playback events") {
 		t.Fatalf("daemon never subscribed:\n%s", output)
 	}
-	if !strings.Contains(output, "does not match daemon v"+version.Number) {
+	if !strings.Contains(output, expected) {
 		t.Fatalf("mismatched plugin version produced no warning:\n%s", output)
 	}
-	if count := strings.Count(output, "does not match daemon"); count != 1 {
+	if count := strings.Count(output, expected); count != 1 {
 		t.Fatalf("warning logged %d times, want 1:\n%s", count, output)
 	}
 	// "Warn, keep running" is the chosen behavior: the activity must still publish.
@@ -268,7 +271,7 @@ func TestVersionWatchRendersReportedVersionCleanly(t *testing.T) {
 		{newer, "plugin v" + newer + " is newer than daemon"},
 		{"v" + newer, "plugin v" + newer + " is newer than daemon"},
 		{" " + newer + " ", "plugin v" + newer + " is newer than daemon"},
-		{"v" + older, "plugin v" + older + " does not match daemon"},
+		{"v" + older, "plugin v" + older + " is older than daemon v" + version.Number},
 	}
 	for _, test := range tests {
 		var watch versionWatch

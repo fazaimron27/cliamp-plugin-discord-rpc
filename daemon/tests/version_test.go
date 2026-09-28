@@ -38,3 +38,48 @@ func TestVersionRelateComparesReleaseLines(t *testing.T) {
 		})
 	}
 }
+
+// The daemon's warning and the --check report describe one relation to the same
+// reader, so they share one sentence. These are the sentences; both consumers
+// are asserted to carry them verbatim.
+func TestVersionExplainWordsEveryRelation(t *testing.T) {
+	tests := []struct {
+		name     string
+		relation version.Relation
+		plugin   string
+		want     string
+	}{
+		{
+			"same line",
+			version.Same,
+			"1.8.0",
+			"plugin v1.8.0 matches daemon v1.8.0",
+		},
+		{
+			"plugin behind",
+			version.PluginBehind,
+			"1.4.0",
+			"plugin v1.4.0 is older than daemon v1.8.0, so the plugin is the half that is behind",
+		},
+		{
+			"daemon behind",
+			version.DaemonBehind,
+			"1.9.0",
+			"plugin v1.9.0 is newer than daemon v1.8.0, so the daemon is the half that is behind",
+		},
+		{
+			"not comparable",
+			version.Unknown,
+			"dev",
+			"plugin vdev is not comparable to daemon v1.8.0",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := version.Explain(test.relation, test.plugin, "1.8.0")
+			if got != test.want {
+				t.Fatalf("Explain(%v, %q, %q) = %q, want %q", test.relation, test.plugin, "1.8.0", got, test.want)
+			}
+		})
+	}
+}
