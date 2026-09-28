@@ -49,6 +49,51 @@ func TestConfigUsesDedicatedPluginSection(t *testing.T) {
 	}
 }
 
+// A quoted value followed by an inline comment used to keep its quote
+// characters, because the quoted branch required a quote as the final character
+// of the whole value and anything trailing it fell through to the unquoted path.
+// An application ID carrying literal quotes reaches the Discord handshake and is
+// rejected there, so the user sees a connection error rather than a
+// configuration error; for the Last.fm key the same defect is silent, and
+// artwork simply never appears.
+func TestConfigParsesQuotedValueWithInlineComment(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"bare quoted", `app_id = "123456789"`, "123456789"},
+		{"quoted, spaced comment", `app_id = "123456789" # my app`, "123456789"},
+		{"quoted, unspaced comment", `app_id = "123456789"# my app`, "123456789"},
+		{"unquoted with comment", `app_id = 123456789 # my app`, "123456789"},
+		{"single quoted", `app_id = '123456789'`, "123456789"},
+		{"hash inside basic quotes", `app_id = "12#34"`, "12#34"},
+		{"hash inside literal quotes", `app_id = '12#34'`, "12#34"},
+		{"quoted, empty comment", `app_id = "123456789" #`, "123456789"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CLIAMP_DISCORD_APP_ID", "")
+			t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "")
+			path := filepath.Join(home, "config.toml")
+			data := "[plugins.discord-rpc]\n" + testCase.line + "\n"
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := config.Load([]string{"--config", path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ApplicationID != testCase.want {
+				t.Errorf("%s parsed as %q, want %q", testCase.line, cfg.ApplicationID, testCase.want)
+			}
+		})
+	}
+}
+
 func TestConfigEnvironmentOverridesFileAndBuiltInDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "env-app")
