@@ -151,6 +151,62 @@ func TestDecodeRejectsDocumentsItCannotTrust(t *testing.T) {
 	})
 }
 
+func TestInspectSaysWhyADocumentCannotBeUsed(t *testing.T) {
+	t.Run("nothing there", func(t *testing.T) {
+		detail := Inspect(statePath(t), time.Minute)
+		if detail.Present || detail.Problem != nil {
+			t.Fatalf("detail = %+v", detail)
+		}
+	})
+
+	t.Run("a live document", func(t *testing.T) {
+		path := statePath(t)
+		writeDocument(t, path, map[string]any{"title": "Playing"})
+
+		detail := Inspect(path, time.Minute)
+		if !detail.Present || detail.Problem != nil || detail.Lapsed {
+			t.Fatalf("detail = %+v", detail)
+		}
+		if detail.State.Title != "Playing" {
+			t.Fatalf("state = %+v", detail.State)
+		}
+		if detail.Age > 5*time.Second || detail.Age < 0 {
+			t.Fatalf("age = %v", detail.Age)
+		}
+	})
+
+	t.Run("left behind by a crash", func(t *testing.T) {
+		path := statePath(t)
+		old := time.Now().Add(-time.Hour).Unix()
+		writeDocument(t, path, map[string]any{"heartbeat": old, "updated_at": old})
+
+		detail := Inspect(path, time.Minute)
+		if !detail.Present || !detail.Lapsed {
+			t.Fatalf("detail = %+v", detail)
+		}
+		// The age is what tells the user how long ago Cliamp stopped, so it has
+		// to be reported rather than inferred from the flag.
+		if detail.Age < 55*time.Minute {
+			t.Fatalf("age = %v, want about an hour", detail.Age)
+		}
+	})
+
+	t.Run("a document from a schema we do not know", func(t *testing.T) {
+		path := statePath(t)
+		writeDocument(t, path, map[string]any{"v": 2})
+
+		// This is the case the run loop cannot explain on its own: it stays
+		// quiet, and the reason is only visible by reading the document.
+		detail := Inspect(path, time.Minute)
+		if !detail.Present || detail.Problem == nil {
+			t.Fatalf("detail = %+v", detail)
+		}
+		if !strings.Contains(detail.Problem.Error(), "schema") {
+			t.Fatalf("problem = %v", detail.Problem)
+		}
+	})
+}
+
 func TestSubscribeDeliversTheDocumentAlreadyOnDisk(t *testing.T) {
 	path := statePath(t)
 	writeDocument(t, path, map[string]any{"title": "Already Playing", "position": 12})

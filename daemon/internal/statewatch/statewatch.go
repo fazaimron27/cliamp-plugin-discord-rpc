@@ -141,6 +141,43 @@ func decode(data []byte) (snapshot, error) {
 	return snapshot{state: state, heartbeat: time.Unix(parsed.Heartbeat, 0)}, nil
 }
 
+// Detail is what can be said about the state document as it stands, for a
+// diagnostic that has to explain a silent transport.
+type Detail struct {
+	// Present reports whether the document is on disk at all.
+	Present bool
+	// Problem is why a document that is on disk could not be read as playback
+	// state, and is nil for one that was read.
+	Problem error
+	// Lapsed reports that the document read cleanly but was already older than
+	// the window, so it is not evidence that Cliamp is running.
+	Lapsed bool
+	// Age is how long ago the plugin last beat.
+	Age time.Duration
+	// State is what the document said.
+	State playback.State
+}
+
+// Inspect reads the document at path once and reports what it found, which is
+// the question Subscribe cannot answer: it delivers what changes, and the case
+// worth diagnosing is the one where nothing does.
+func Inspect(path string, maxAge time.Duration) Detail {
+	current, err := read(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return Detail{}
+	case err != nil:
+		return Detail{Present: true, Problem: err}
+	}
+	now := time.Now()
+	return Detail{
+		Present: true,
+		Age:     now.Sub(current.heartbeat),
+		Lapsed:  !current.liveAt(now, maxAge),
+		State:   current.state,
+	}
+}
+
 // Subscribe watches the document at path and delivers each document as a
 // playback.State, mirroring the IPC subscription so the run loop does not have
 // to branch on the transport.
