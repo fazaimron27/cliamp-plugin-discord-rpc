@@ -2,8 +2,10 @@ package tests
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net"
 	"path/filepath"
 	"strings"
@@ -90,5 +92,46 @@ func TestCliampSubscriptionReportsProtocolError(t *testing.T) {
 		t.Fatal("expected an error for a rejected subscription")
 	} else if !strings.Contains(err.Error(), "invalid_version") {
 		t.Fatalf("err = %v, want it to name the Cliamp error code", err)
+	}
+}
+
+// A snapshot the daemon cannot use must not vanish silently. Cliamp answers nil
+// when it has no player state, and a snapshot built from that answer carries no
+// usable status; discarding it is right, discarding it invisibly is not, because
+// the gap it leaves in Discord presence then has no explanation anywhere.
+func TestCliampSubscriptionReportsDiscardedSnapshot(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	serveConn(t, socket, func(conn net.Conn, _ cliampRequest) {
+		_, _ = conn.Write([]byte("{\"version\":2,\"id\":\"discord-rpc-subscribe\",\"ok\":true}\n"))
+		// A snapshot with no status, then a good one. The reader consumes frames
+		// in order, so receiving the good one proves the bad one was handled --
+		// and its log line must already have been written by then.
+		_, _ = conn.Write([]byte("{\"event\":\"plugin.discord-rpc.playback\",\"time\":1000,\"data\":{\"title\":\"Track\"}}\n"))
+		_, _ = conn.Write([]byte("{\"event\":\"plugin.discord-rpc.playback\",\"time\":1001,\"data\":{\"status\":\"playing\",\"title\":\"Track\"}}\n"))
+	})
+
+	var captured bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&captured)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	states, err := cliampipc.Subscribe(ctx, socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case state := <-states:
+		if state.ObservedAt != 1001 {
+			t.Fatalf("received the rejected snapshot (time %d), want the one published after it", state.ObservedAt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for playback state")
+	}
+
+	if !strings.Contains(captured.String(), "status") {
+		t.Errorf("discarded a snapshot without logging why; log was %q", captured.String())
 	}
 }

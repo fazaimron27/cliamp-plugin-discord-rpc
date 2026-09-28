@@ -33,8 +33,20 @@ end
 
 local function publish(event, forced_status)
   event = event or {}
+
+  -- The daemon rejects a snapshot whose status is not playing, paused or
+  -- stopped, and every publish here is retained, so an unusable snapshot would
+  -- replace the last good one on its way to being discarded. Cliamp answers
+  -- nil when it has nothing to report, which is not the same as "stopped", so
+  -- withhold the publish rather than invent a status and say so in the log.
+  local status = forced_status or value(event, "status", cliamp.player.state)
+  if status == nil or status == "" then
+    cliamp.log.error("discord-rpc: no player state available, skipping publish")
+    return
+  end
+
   local ok, err = p:publish("playback", {
-    status = forced_status or value(event, "status", cliamp.player.state),
+    status = status,
     title = value(event, "title", cliamp.track.title) or "",
     artist = value(event, "artist", cliamp.track.artist) or "",
     album = value(event, "album", cliamp.track.album) or "",

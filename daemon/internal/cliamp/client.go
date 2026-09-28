@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -114,11 +115,23 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, e
 
 		for scanner.Scan() {
 			var message event
-			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil || message.Event != PlaybackTopic {
+			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+				log.Printf("cliamp: discarding undecodable frame: %v", err)
 				continue
 			}
+			if message.Event != PlaybackTopic {
+				continue
+			}
+			// A rejected snapshot is dropped rather than republished, so it
+			// leaves Discord showing whatever the last good snapshot said. Say
+			// so: this is the only account of why presence stopped tracking.
 			var state playback.State
-			if err := json.Unmarshal(message.Data, &state); err != nil || state.Validate() != nil {
+			if err := json.Unmarshal(message.Data, &state); err != nil {
+				log.Printf("cliamp: discarding unreadable %s snapshot: %v", PlaybackTopic, err)
+				continue
+			}
+			if err := state.Validate(); err != nil {
+				log.Printf("cliamp: discarding invalid %s snapshot: %v", PlaybackTopic, err)
 				continue
 			}
 			state.ObservedAt = message.Time
