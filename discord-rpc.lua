@@ -59,8 +59,20 @@ end
 -- transport takes it.
 local function snapshot(event, forced_status)
   event = event or {}
+  -- The daemon accepts only playing, paused and stopped, and every snapshot
+  -- either replaces the last retained one or overwrites the last good document,
+  -- so an unusable snapshot is destructive on its way to being discarded.
+  -- Cliamp answers nil when it has nothing to report, which is not the same as
+  -- "stopped", so withhold it: returning nil is how this function says so, and
+  -- each transport decides what withholding means for it. The status enum is
+  -- deliberately not duplicated here — a second copy would be one to drift, and
+  -- the contract test cannot catch a drift it shares.
+  local status = forced_status or value(event, "status", cliamp.player.state)
+  if status == nil or status == "" then
+    return nil
+  end
   return {
-    status = forced_status or value(event, "status", cliamp.player.state),
+    status = status,
     title = value(event, "title", cliamp.track.title) or "",
     artist = value(event, "artist", cliamp.track.artist) or "",
     album = value(event, "album", cliamp.track.album) or "",
@@ -76,7 +88,12 @@ end
 -- IPC: one retained publish per snapshot. The daemon subscribes and each
 -- snapshot replaces the last, so nothing has to be remembered here.
 local function publish(event, forced_status)
-  local ok, err = p:publish("playback", snapshot(event, forced_status), { retain = true })
+  local payload = snapshot(event, forced_status)
+  if payload == nil then
+    cliamp.log.error("discord-rpc: no player state available, skipping publish")
+    return
+  end
+  local ok, err = p:publish("playback", payload, { retain = true })
   if not ok then
     cliamp.log.error("discord-rpc: publish failed: " .. tostring(err))
   end
@@ -97,6 +114,12 @@ if TRANSPORT == "file" then
   local document = { v = SCHEMA_VERSION }
 
   local function flush()
+    -- A beat is liveness for the last good snapshot, so there is nothing to
+    -- keep alive until one has been written, and a document with no status is
+    -- one the daemon refuses anyway.
+    if document.status == nil then
+      return
+    end
     document.heartbeat = os.time()
     local ok, err = pcall(function()
       cliamp.fs.write(STATE_PATH, cliamp.json.encode(document))
@@ -107,7 +130,12 @@ if TRANSPORT == "file" then
   end
 
   local function change(event, forced_status)
-    for key, item in pairs(snapshot(event, forced_status)) do
+    local payload = snapshot(event, forced_status)
+    if payload == nil then
+      cliamp.log.error("discord-rpc: no player state available, skipping write")
+      return
+    end
+    for key, item in pairs(payload) do
       document[key] = item
     end
     document.updated_at = os.time()
