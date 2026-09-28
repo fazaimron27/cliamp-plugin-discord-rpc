@@ -74,8 +74,8 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 			}
 		}
 
-		// The documentation writes the release both ways: v1.7.1 in install
-		// commands and a bare 1.7.1 in sample output and prose. Scanning only the
+		// The documentation writes the release both ways: v-prefixed in install
+		// commands and bare in sample output and prose. Scanning only the
 		// prefixed form leaves those bare ones to rot through a bump, so every
 		// version-shaped string is scanned and two shapes are exempted instead.
 		//
