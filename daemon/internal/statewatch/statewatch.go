@@ -24,12 +24,16 @@ import (
 )
 
 const (
-	// schemaVersion is the document version this package reads. A document
-	// declaring another one is refused rather than read loosely: a version this
-	// daemon has not been taught about may mean something different by the same
-	// field names. The cost of refusing is that the presence goes quiet, which
-	// cliamp-rpcd --check reports.
-	schemaVersion = 1
+	// SchemaVersion is the document version this package reads, and it is
+	// exported because the plugin writes it: a document declares its own schema,
+	// and the two halves agreeing on this number is the whole of the contract
+	// between them.
+	//
+	// A document declaring another one is refused rather than read loosely: a
+	// version this daemon has not been taught about may mean something different
+	// by the same field names. The cost of refusing is that the presence goes
+	// quiet, which cliamp-rpcd --check reports.
+	SchemaVersion = 1
 	// settleDelay is how long the watcher waits for a write to stop producing
 	// events before reading. The plugin replaces the whole document in one
 	// write, and the kernel reports that as several events, so reading on the
@@ -107,10 +111,10 @@ func decode(data []byte) (snapshot, error) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return snapshot{}, fmt.Errorf("state document is not readable: %w", err)
 	}
-	if parsed.Schema != schemaVersion {
+	if parsed.Schema != SchemaVersion {
 		return snapshot{}, fmt.Errorf(
 			"state document schema %d is not the schema %d this daemon reads",
-			parsed.Schema, schemaVersion,
+			parsed.Schema, SchemaVersion,
 		)
 	}
 	state := playback.State{
