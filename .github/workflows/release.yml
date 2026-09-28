@@ -24,6 +24,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The tag names the archives and the release, while version.Number is what
+      # the daemon reports. Nothing else connects the two, so a tag pushed
+      # against a stale constant would publish v1.8.0 archives containing a
+      # binary that answers "1.7.1".
+      - name: Verify tag matches the version constant
+        run: |
+          set -euo pipefail
+          declared=$(grep -oP '(?<=^const Number = ")[^"]+' daemon/internal/version/version.go)
+          if [ "${GITHUB_REF_NAME}" != "v${declared}" ]; then
+            printf 'tag %s does not match version.Number %s\n' "${GITHUB_REF_NAME}" "${declared}" >&2
+            exit 1
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
