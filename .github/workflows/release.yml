@@ -11,7 +11,11 @@ permissions:
 jobs:
   release:
     name: Validate and build
-    runs-on: ubuntu-latest
+    # Pinned to a dated image: ubuntu-latest moved to Ubuntu 26.04 from
+    # 2026-10-19, so the floating label would change this job's OS without a
+    # commit here. The build sets CGO_ENABLED=0, so the image the binary is
+    # built on cannot raise the glibc floor of the released archive.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -107,7 +111,8 @@ jobs:
   publish:
     name: Publish release
     needs: release
-    runs-on: ubuntu-latest
+    # Pinned for the same reason as the build job above.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write

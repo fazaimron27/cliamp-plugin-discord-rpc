@@ -17,6 +17,9 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
+// presenceRefresh is how often Discord is told the same thing again. Discord
+// drops an activity that is not re-sent, so a playing track is republished on
+// this interval even when nothing about it changed.
 const presenceRefresh = 15 * time.Second
 
 const (
@@ -83,6 +86,14 @@ type artworkResolver interface {
 	Resolve(context.Context, string, string) (string, error)
 }
 
+// artworkResult is a lookup's outcome, tagged with the track it was asked about
+// so the loop can discard an answer that arrived after the track changed.
+type artworkResult struct {
+	track string
+	image string
+	err   error
+}
+
 type timelineTracker struct {
 	last    playback.State
 	have    bool
@@ -126,10 +137,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cfg.LastFMAPIKey == "" {
 		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
-	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.NewLastFM(cfg.LastFMAPIKey), time.Now)
+	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.NewLastFM(cfg.LastFMAPIKey), time.Now, presenceRefresh)
 }
 
-func run(ctx context.Context, cfg config.Config, client discordClient, resolver artworkResolver, now func() time.Time) error {
+// run is the daemon's event loop. refresh is a parameter rather than the
+// presenceRefresh constant so a test can drive the loop's timed behavior without
+// waiting out the real interval; production passes the constant.
+func run(ctx context.Context, cfg config.Config, client discordClient, resolver artworkResolver, now func() time.Time, refresh time.Duration) error {
 	defer client.Close()
 
 	var states <-chan playback.State
@@ -140,6 +154,28 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	var publishedAt time.Time
 	reconnectDelay := time.Second
 	var watch versionWatch
+
+	// Artwork is looked up by a goroutine and delivered here. A request can take
+	// the resolver's whole HTTP timeout, and this loop is the only thing that
+	// talks to Discord, so waiting for one inline would queue every pause, stop
+	// and track change behind Last.fm.
+	resolved := make(chan artworkResult, 1)
+	// What the loop knows about the track it is showing. The resolver caches too,
+	// but asking it is only cheap when it already has the answer, so the loop asks
+	// on a track change and on the refresh rather than on every reconcile.
+	var artworkTrack string
+	var artworkImage string
+
+	requestArtwork := func(track, artist, title string) {
+		go func() {
+			image, err := resolver.Resolve(ctx, artist, title)
+			select {
+			case resolved <- artworkResult{track: track, image: image, err: err}:
+			// A send with no reader left would outlive the loop.
+			case <-ctx.Done():
+			}
+		}()
+	}
 
 	refreshTimer := time.NewTimer(time.Hour)
 	if !refreshTimer.Stop() {
@@ -178,14 +214,20 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			clear()
 			return
 		}
-		image, err := resolver.Resolve(ctx, lastState.Artist, lastState.Title)
-		if err != nil {
-			log.Printf("resolve Last.fm artwork: %v", err)
+		track := lastState.TrackKey()
+		if track != artworkTrack {
+			// A different track. Drop the previous answer rather than showing it,
+			// publish with what is known now, and let the reply republish: waiting
+			// here is what made a pause or a skip queue behind the network.
+			artworkTrack = track
+			artworkImage = ""
+			requestArtwork(track, lastState.Artist, lastState.Title)
 		}
+		image := artworkImage
 		currentTime := now()
 		desiredKey := lastState.PresenceKey() + "\x00" + image
-		if desiredKey == publishedKey && client.Connected() && currentTime.Sub(publishedAt) < presenceRefresh {
-			reset(refreshTimer, presenceRefresh-currentTime.Sub(publishedAt))
+		if desiredKey == publishedKey && client.Connected() && currentTime.Sub(publishedAt) < refresh {
+			reset(refreshTimer, refresh-currentTime.Sub(publishedAt))
 			return
 		}
 		if err := client.Connect(ctx); err != nil {
@@ -201,7 +243,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		}
 		publishedKey = desiredKey
 		publishedAt = currentTime
-		reset(refreshTimer, presenceRefresh)
+		reset(refreshTimer, refresh)
 	}
 
 	accept := func(state playback.State) {
@@ -244,7 +286,33 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 				continue
 			}
 			accept(state)
+		case result := <-resolved:
+			if result.track != artworkTrack {
+				// The track changed while the lookup was open. Discord is already
+				// showing the new one, so this answer is stale.
+				continue
+			}
+			if result.err != nil {
+				log.Printf("resolve Last.fm artwork: %v", result.err)
+			}
+			// An empty answer is remembered for this track rather than retried
+			// here: an answer must not be able to ask for itself, or the loop
+			// would re-ask on every reply. The resolver's expiry decides when the
+			// next attempt is worth making.
+			artworkImage = result.image
+			reconcile()
 		case <-refreshTimer.C:
+			// The refresh is the one event no answer can cause, so it is the only
+			// place a lookup that came back with nothing may be retried. That is
+			// what lets a track recover from a request that failed or ran before
+			// Last.fm had the artwork, without asking on every reconcile.
+			//
+			// artworkTrack is passed as the identity to match the reply against,
+			// not as the artist: it names the track the loop is currently showing,
+			// which is lastState by the time this fires.
+			if artworkImage == "" && lastState.IsPlaying() {
+				requestArtwork(artworkTrack, lastState.Artist, lastState.Title)
+			}
 			reconcile()
 		}
 	}
