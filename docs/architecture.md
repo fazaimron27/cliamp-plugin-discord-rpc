@@ -70,6 +70,16 @@ of interpreting it, so the daemon sends
 `{"version":2,"id":...,"method":"subscribe","topics":[...]}` and validates the
 acknowledged version and error object. See Cliamp's `docs/upgrading-ipc-v2.md`.
 
+Version 2 is mandatory rather than negotiated: an older build refuses the
+subscription instead of falling back to version 1, so the two failures a user can
+hit here name which Cliamp they are running. `invalid_version` means the
+executable predates the
+[version 2 IPC cutover](https://github.com/bjarneo/cliamp/commit/c75cdec);
+`unknown operation`, or a missing `publish`, means it predates the
+[retained plugin event pub/sub merge](https://github.com/bjarneo/cliamp/commit/f373776d).
+The `file` transport is what serves a build older than both, which is why it asks
+nothing of Cliamp beyond `cliamp.fs`.
+
 The event is retained in Cliamp memory. A daemon that starts after playback has
 begun receives the newest snapshot immediately. Retention is process-local and
 is never written to disk.
@@ -161,7 +171,9 @@ cliamp-plugin-discord-rpc/
   `[plugins.discord-rpc]` from Cliamp's TOML config. The transport is the one
   setting that belongs to both halves at once, so this package records where its
   value came from and can say when a flag or environment override has the plugin
-  reading a different one.
+  reading a different one. `--transport` and `CLIAMP_DISCORD_TRANSPORT` are the
+  two overrides that can do it; they exist for troubleshooting rather than
+  configuration, and a daemon running under one warns at startup.
 - `daemon/internal/cliamp` subscribes to retained and live plugin events over
   Cliamp's owner-only Unix socket.
 - `daemon/internal/statewatch` reads and watches the state document. It presents

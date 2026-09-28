@@ -60,7 +60,12 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 	})
 
 	t.Run("documentation", func(t *testing.T) {
-		source := repoFile(t, "README.md")
+		// Every file a release pin is written into is scanned, the build doc
+		// included. Nothing else reads docs/, so a pin moved there is a pin no
+		// check can see: the split that created docs/building.md moved a
+		// `git clone --branch vX.Y.Z` into it, and leaving the scan on README.md
+		// alone would have retired that pin from the guard silently.
+		//
 		// Derived from the current release rather than hardcoded, so a pin left
 		// behind by a partial bump is rejected instead of tolerated. The allowed
 		// set holds the current release and nothing else: it used to carry
@@ -71,32 +76,36 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 		allowed := map[string]bool{
 			"v" + number: true, // the current release
 		}
-		for _, loc := range regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+`).FindAllStringIndex(source, -1) {
-			found := source[loc[0]:loc[1]]
-			if !allowed[found] {
-				line := 1 + strings.Count(source[:loc[0]], "\n")
-				t.Errorf("README.md:%d pins %s, which is not the current release", line, found)
-			}
-		}
+		for _, name := range []string{"README.md", "docs/building.md"} {
+			source := repoFile(t, name)
 
-		// The documentation writes the release both ways: v-prefixed in install
-		// commands and bare in sample output and prose. Scanning only the
-		// prefixed form leaves those bare ones to rot through a bump, so every
-		// version-shaped string is scanned and two shapes are exempted instead.
-		//
-		// A match inside a v-prefixed version is already covered by the loop
-		// above, and a Go version names the toolchain a contributor needs rather
-		// than this project's release.
-		bare := regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
-		for _, loc := range bare.FindAllStringIndex(source, -1) {
-			found := source[loc[0]:loc[1]]
-			before := source[:loc[0]]
-			if strings.HasSuffix(before, "v") || strings.HasSuffix(before, "Go ") {
-				continue
+			for _, loc := range regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+`).FindAllStringIndex(source, -1) {
+				found := source[loc[0]:loc[1]]
+				if !allowed[found] {
+					line := 1 + strings.Count(source[:loc[0]], "\n")
+					t.Errorf("%s:%d pins %s, which is not the current release", name, line, found)
+				}
 			}
-			if found != number {
-				line := 1 + strings.Count(before, "\n")
-				t.Errorf("README.md:%d pins %s, want %s", line, found, number)
+
+			// The documentation writes the release both ways: v-prefixed in install
+			// commands and bare in sample output and prose. Scanning only the
+			// prefixed form leaves those bare ones to rot through a bump, so every
+			// version-shaped string is scanned and two shapes are exempted instead.
+			//
+			// A match inside a v-prefixed version is already covered by the loop
+			// above, and a Go version names the toolchain a contributor needs rather
+			// than this project's release.
+			bare := regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+			for _, loc := range bare.FindAllStringIndex(source, -1) {
+				found := source[loc[0]:loc[1]]
+				before := source[:loc[0]]
+				if strings.HasSuffix(before, "v") || strings.HasSuffix(before, "Go ") {
+					continue
+				}
+				if found != number {
+					line := 1 + strings.Count(before, "\n")
+					t.Errorf("%s:%d pins %s, want %s", name, line, found, number)
+				}
 			}
 		}
 	})
