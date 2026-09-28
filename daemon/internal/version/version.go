@@ -2,6 +2,7 @@
 package version
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -72,6 +73,30 @@ func Relate(pluginVersion, daemonVersion string) Relation {
 		return PluginBehind
 	}
 	return DaemonBehind
+}
+
+// Explain words a relation as one sentence, naming both release lines and, when
+// one half is behind, which half that is.
+//
+// The running daemon's warning and the --check report answer the same question
+// about the same snapshot, and they used to answer it in different words: the
+// daemon said the versions "do not match", the diagnostic said the plugin "is
+// older than" the daemon. A reader with both in front of them had two accounts of
+// one state to reconcile. One function words both, so there is one account.
+//
+// The sentence carries no trailing punctuation, leaving a caller free to follow
+// it with the remedy for the half it names.
+func Explain(relation Relation, plugin, daemon string) string {
+	switch relation {
+	case Same:
+		return fmt.Sprintf("plugin v%s matches daemon v%s", plugin, daemon)
+	case PluginBehind:
+		return fmt.Sprintf("plugin v%s is older than daemon v%s, so the plugin is the half that is behind", plugin, daemon)
+	case DaemonBehind:
+		return fmt.Sprintf("plugin v%s is newer than daemon v%s, so the daemon is the half that is behind", plugin, daemon)
+	default:
+		return fmt.Sprintf("plugin v%s is not comparable to daemon v%s", plugin, daemon)
+	}
 }
 
 // releaseLine parses a dotted version into its major and minor components,

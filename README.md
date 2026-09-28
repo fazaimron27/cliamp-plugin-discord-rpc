@@ -380,7 +380,7 @@ cliamp-rpcd 1.8.0
 
 transport ok    ipc, from the default
 cliamp    ok    subscribed to plugin.discord-rpc.playback at /home/faza/.config/cliamp/cliamp.sock
-plugin    ok    plugin v1.8.0 matches this daemon
+plugin    ok    plugin v1.8.0 matches daemon v1.8.0
 discord   fail  Discord IPC unavailable: dial unix /run/user/1000/discord-ipc-0: connect: no such file or directory
 last.fm   ok    the API key was accepted
 config    ok    /home/faza/.config/cliamp/config.toml

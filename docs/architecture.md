@@ -57,7 +57,10 @@ installed independently: the plugin from Cliamp's plugin installer, the daemon
 from a release archive or a source build, so either one can be the stale side. A
 patch difference is silent: it cannot change this payload, so there is nothing for
 the user to act on. A plugin old enough to omit the field predates the report and
-is not warned about. The daemon's own release identity lives in
+is not warned about. The sentence it prints comes from `version.Explain`, which
+the `--check` diagnostic prints too, so the two describe one pairing one way; only
+the running daemon appends the remedy, because only it knows it is running. The
+daemon's own release identity lives in
 `daemon/internal/version`, which the `--version` flag, the startup log, and the
 Last.fm `User-Agent` all read.
 

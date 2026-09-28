@@ -189,6 +189,8 @@ func pluginVersion(ctx context.Context, states <-chan playback.State) (string, s
 			if state.PluginVersion == "" {
 				return "warn", "the plugin published no version, so it predates the version report"
 			}
+			// Both transports report the relation the same way, so the helper
+			// words it once for this path and the state document's.
 			return relation(state.PluginVersion)
 		case <-timer.C:
 			return "warn", "no retained snapshot, so the plugin version is unknown"
@@ -200,19 +202,20 @@ func pluginVersion(ctx context.Context, states <-chan playback.State) (string, s
 
 // relation describes how a plugin's reported release compares to this daemon's.
 // Both transports report the same version in the same way, so they share this:
-// naming which half is behind is the answer either way.
+// naming which half is behind is the answer either way. The sentence itself comes
+// from version.Explain, which is what the running daemon's warning is worded
+// from too, so the log and the report cannot describe one pairing two ways.
 func relation(reported string) (string, string) {
 	reported = normalize(reported)
-	switch version.Relate(reported, version.Number) {
-	case version.Same:
-		return "ok", fmt.Sprintf("plugin v%s matches this daemon", reported)
-	case version.PluginBehind:
-		return "warn", fmt.Sprintf("plugin v%s is older than daemon v%s, so the plugin is the half that is behind", reported, version.Number)
-	case version.DaemonBehind:
-		return "warn", fmt.Sprintf("plugin v%s is newer than daemon v%s, so the daemon is the half that is behind", reported, version.Number)
-	default:
-		return "warn", fmt.Sprintf("plugin v%s is not comparable to daemon v%s", reported, version.Number)
+	rel := version.Relate(reported, version.Number)
+	// Skew warns rather than fails, exactly as the running daemon does: a
+	// mismatch is not this command's own failure, and the user may be gating a
+	// start on its exit code.
+	status := "warn"
+	if rel == version.Same {
+		status = "ok"
 	}
+	return status, version.Explain(rel, reported, version.Number)
 }
 
 // redact shortens an application ID to a recognizable prefix. The daemon's own

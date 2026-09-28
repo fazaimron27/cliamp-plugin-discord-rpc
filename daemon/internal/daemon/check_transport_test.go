@@ -48,9 +48,11 @@ func TestCheckPassesForALiveStateFile(t *testing.T) {
 		t.Errorf("a live document was reported as a failure:\n%s", report)
 	}
 	// The plugin line has to come from the document here: there is no
-	// subscription to read a retained snapshot from.
-	if !strings.Contains(report, "matches this daemon") {
-		t.Errorf("report omits the plugin relation:\n%s", report)
+	// subscription to read a retained snapshot from. It is asserted as the
+	// sentence version.Explain words, so this pins which relation the document
+	// produced rather than only that some plugin line appeared at all.
+	if want := version.Explain(version.Same, version.Number, version.Number); !strings.Contains(report, want) {
+		t.Errorf("report does not give the document's plugin relation as %q:\n%s", want, report)
 	}
 	if !strings.Contains(report, path) {
 		t.Errorf("report does not name the document it read:\n%s", report)

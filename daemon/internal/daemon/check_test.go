@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -33,33 +31,6 @@ func (unreachableDiscord) Connect(context.Context) error {
 func (unreachableDiscord) SetActivity(*presence.Activity) error { return nil }
 func (unreachableDiscord) ClearActivity() error                 { return nil }
 func (unreachableDiscord) Close() error                         { return nil }
-
-// newerLine and olderLine derive an adjacent release line from the daemon's own
-// instead of hardcoding one, so a version bump cannot leave a fixture asserting
-// a pairing that is no longer adjacent. The version-watch fixtures in
-// daemon_test.go rely on the same derivation.
-func newerLine(t *testing.T) string {
-	t.Helper()
-	return adjacentLine(t, 1)
-}
-
-func olderLine(t *testing.T) string {
-	t.Helper()
-	return adjacentLine(t, -1)
-}
-
-func adjacentLine(t *testing.T, delta int) string {
-	t.Helper()
-	parts := strings.SplitN(version.Number, ".", 3)
-	if len(parts) < 2 {
-		t.Fatalf("version.Number %q is not major.minor", version.Number)
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		t.Fatalf("version.Number %q has a non-numeric minor: %v", version.Number, err)
-	}
-	return fmt.Sprintf("%s.%d.0", parts[0], minor+delta)
-}
 
 // serveCheckCliamp stands up the v2 handshake harness on a fresh socket and
 // returns the socket path. The harness replays one snapshot carrying
@@ -223,8 +194,42 @@ func TestCheckNamesTheStaleHalfOnVersionSkew(t *testing.T) {
 	}
 }
 
+// The diagnostic and the running daemon answer the same question about the same
+// snapshot, so they must answer it in the same words. Asserting that both carry
+// one sentence is what stops either from growing its own phrasing again — both
+// did once, and each rewording had to be discovered by reading the other.
+func TestVersionMessagingSpeaksWithOneVoice(t *testing.T) {
+	tests := []struct {
+		name     string
+		relation version.Relation
+		plugin   string
+	}{
+		{"plugin behind", version.PluginBehind, olderLine(t)},
+		{"daemon behind", version.DaemonBehind, newerLine(t)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			explained := version.Explain(test.relation, test.plugin, version.Number)
+
+			var watch versionWatch
+			if warning := watch.observe(test.plugin); !strings.Contains(warning, explained) {
+				t.Errorf("the daemon's warning does not say %q: %q", explained, warning)
+			}
+
+			socket := serveCheckCliamp(t, test.plugin)
+			cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
+			var out bytes.Buffer
+			check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+			if !strings.Contains(out.String(), explained) {
+				t.Errorf("the check report does not say %q:\n%s", explained, out.String())
+			}
+		})
+	}
+}
+
 func TestCheckStaysQuietOnAMatchingPluginLine(t *testing.T) {
-	socket := serveCheckCliamp(t, version.Number+"-dev.1")
+	pluginLine := version.Number + "-dev.1"
+	socket := serveCheckCliamp(t, pluginLine)
 	cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
 
 	var out bytes.Buffer
@@ -233,8 +238,8 @@ func TestCheckStaysQuietOnAMatchingPluginLine(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "matches this daemon") {
-		t.Fatalf("a matching release line was not reported as a match:\n%s", out.String())
+	if want := version.Explain(version.Same, pluginLine, version.Number); !strings.Contains(out.String(), want) {
+		t.Fatalf("a matching release line was not reported as %q:\n%s", want, out.String())
 	}
 }
 

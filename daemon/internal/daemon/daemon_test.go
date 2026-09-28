@@ -169,18 +169,21 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, presenceRefresh)
 	}()
 
+	// The run loop logs the same sentence the --check report prints, so this
+	// asserts the shared wording rather than a private one.
+	expected := "discord-rpc " + version.Explain(version.PluginBehind, "1.4.0", version.Number)
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(logs.String(), "does not match daemon") {
+	for time.Now().Before(deadline) && !strings.Contains(logs.String(), expected) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	output := logs.String()
 	if !strings.Contains(output, "subscribed to Cliamp playback events") {
 		t.Fatalf("daemon never subscribed:\n%s", output)
 	}
-	if !strings.Contains(output, "does not match daemon v"+version.Number) {
+	if !strings.Contains(output, expected) {
 		t.Fatalf("mismatched plugin version produced no warning:\n%s", output)
 	}
-	if count := strings.Count(output, "does not match daemon"); count != 1 {
+	if count := strings.Count(output, expected); count != 1 {
 		t.Fatalf("warning logged %d times, want 1:\n%s", count, output)
 	}
 	// "Warn, keep running" is the chosen behavior: the activity must still publish.
@@ -205,6 +208,23 @@ func TestVersionWatchReportsMismatchOnce(t *testing.T) {
 	// A different plugin version is a new pairing, so it must be reported.
 	if upgrade := watch.observe("1.5.0"); upgrade == "" {
 		t.Fatal("new plugin version produced no warning")
+	}
+}
+
+// The plugin reports whatever its manifest spells, which may carry the release
+// tag's leading "v" and may carry surrounding space. Both spellings normalize to
+// the same version, so they render the same warning — and a warning that renders
+// identically is the duplicate the watch exists to suppress.
+func TestVersionWatchReportsAnEquivalentVersionOnce(t *testing.T) {
+	older := olderLine(t)
+	var watch versionWatch
+	if warning := watch.observe(older); warning == "" {
+		t.Fatal("older plugin line produced no warning")
+	}
+	for _, equivalent := range []string{"v" + older, " " + older + " "} {
+		if repeat := watch.observe(equivalent); repeat != "" {
+			t.Fatalf("observe(%q) repeated the warning for %q: %q", equivalent, older, repeat)
+		}
 	}
 }
 
@@ -288,7 +308,7 @@ func TestVersionWatchRendersReportedVersionCleanly(t *testing.T) {
 		{newer, "plugin v" + newer + " is newer than daemon"},
 		{"v" + newer, "plugin v" + newer + " is newer than daemon"},
 		{" " + newer + " ", "plugin v" + newer + " is newer than daemon"},
-		{"v" + older, "plugin v" + older + " does not match daemon"},
+		{"v" + older, "plugin v" + older + " is older than daemon v" + version.Number},
 	}
 	for _, test := range tests {
 		var watch versionWatch

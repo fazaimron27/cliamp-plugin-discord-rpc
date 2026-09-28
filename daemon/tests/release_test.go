@@ -96,6 +96,19 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 		}
 	})
 
+	// The README quotes the diagnostic's report, and a quote that no longer
+	// matches what the command prints is documentation that went stale in
+	// silence — the same class of drift as a missed version pin, and undetected
+	// by the scans above, which read versions rather than wording. The sentence
+	// is derived from the function the report words itself with, so rewording
+	// the report fails here until the quoted line is updated to match.
+	t.Run("quoted report", func(t *testing.T) {
+		quoted := version.Explain(version.Same, number, number)
+		if !strings.Contains(repoFile(t, "README.md"), quoted) {
+			t.Errorf("README.md does not quote the diagnostic's matching plugin line; want a line reading %q", quoted)
+		}
+	})
+
 	t.Run("release workflow", func(t *testing.T) {
 		source := repoFile(t, ".github/workflows/release.yml")
 		// release.yml is the only place that checks the tag against
