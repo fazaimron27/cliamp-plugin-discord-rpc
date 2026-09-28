@@ -1,1 +1,6 @@
 /cliamp-rpcd
+
+# Design specs and plans are working notes for the change in progress, not part
+# of the shipped tree. They are written under docs/superpowers/ by the spec-driven
+# workflow and must not be committed.
+/docs/superpowers/
