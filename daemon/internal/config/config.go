@@ -19,6 +19,9 @@ type Config struct {
 	// ShowVersion asks the caller to print the version and exit instead of
 	// running the daemon.
 	ShowVersion bool
+	// ShowCheck asks the caller to probe the runtime environment, report, and
+	// exit instead of running the daemon.
+	ShowCheck bool
 
 	ApplicationID string
 	CliampSocket  string
@@ -43,6 +46,7 @@ func Load(args []string) (Config, error) {
 		writeUsage(flags)
 	}
 	flags.BoolVar(&cfg.ShowVersion, "version", false, "print the version and exit")
+	flags.BoolVar(&cfg.ShowCheck, "check", false, "probe the runtime environment, report, and exit")
 	flags.StringVar(&cfg.ApplicationID, "app-id", os.Getenv("CLIAMP_DISCORD_APP_ID"), "Discord application `ID` (or CLIAMP_DISCORD_APP_ID)")
 	flags.StringVar(&cfg.CliampSocket, "socket", filepath.Join(home, ".config", "cliamp", "cliamp.sock"), "Cliamp IPC socket `path`")
 	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file `path` containing Discord RPC credentials")
