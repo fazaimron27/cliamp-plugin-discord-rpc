@@ -1,6 +1,6 @@
 ---
 name: Enhancement
-about: Propose work that is not a defect: new checks, tooling, or behavior
+about: "Propose work that is not a defect — new checks, tooling, or behavior"
 title: ""
 labels: enhancement
 assignees: ""
