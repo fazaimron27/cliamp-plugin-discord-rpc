@@ -185,6 +185,82 @@ func TestVersionWatchStaysQuietForCompatiblePlugins(t *testing.T) {
 	}
 }
 
+func TestVersionWatchReportsPluginBehind(t *testing.T) {
+	var watch versionWatch
+	warning := watch.observe("1.6.0")
+	if warning == "" {
+		t.Fatal("older plugin line produced no warning")
+	}
+	if !strings.Contains(warning, "1.6.0") || !strings.Contains(warning, version.Number) {
+		t.Fatalf("warning does not name both versions: %q", warning)
+	}
+	if !strings.Contains(warning, "cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v"+version.Number) {
+		t.Fatalf("warning does not tell the user to update the plugin: %q", warning)
+	}
+	// The whole point of the direction: do not send the user at the daemon when
+	// the plugin is the half that is behind.
+	if strings.Contains(warning, "install.sh") {
+		t.Fatalf("warning points at the daemon, but the plugin is behind: %q", warning)
+	}
+}
+
+func TestVersionWatchReportsDaemonBehind(t *testing.T) {
+	var watch versionWatch
+	warning := watch.observe("1.8.0")
+	if warning == "" {
+		t.Fatal("newer plugin line produced no warning")
+	}
+	if !strings.Contains(warning, "1.8.0") || !strings.Contains(warning, version.Number) {
+		t.Fatalf("warning does not name both versions: %q", warning)
+	}
+	if !strings.Contains(warning, "daemon is the half that is behind") {
+		t.Fatalf("warning does not name the daemon as behind: %q", warning)
+	}
+	if !strings.Contains(warning, "raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.8.0/install.sh") {
+		t.Fatalf("warning does not point at the daemon update on the newer line: %q", warning)
+	}
+	if !strings.Contains(warning, "rebuild from source") {
+		t.Fatalf("warning omits the from-source path: %q", warning)
+	}
+	// The bug this direction fixes: never tell the user to replace the plugin
+	// when the plugin is the newer half.
+	if strings.Contains(warning, "cliamp plugins install") {
+		t.Fatalf("warning points at the plugin, but the daemon is behind: %q", warning)
+	}
+}
+
+func TestVersionWatchNormalizesTagInDaemonAdvice(t *testing.T) {
+	for _, pluginVersion := range []string{"1.8.0", "v1.8.0", " 1.8.0 "} {
+		var watch versionWatch
+		warning := watch.observe(pluginVersion)
+		if !strings.Contains(warning, "/v1.8.0/install.sh") {
+			t.Fatalf("observe(%q) produced a malformed tag: %q", pluginVersion, warning)
+		}
+	}
+}
+
+func TestVersionWatchRendersReportedVersionCleanly(t *testing.T) {
+	tests := []struct {
+		plugin   string
+		expected string
+	}{
+		{"1.8.0", "plugin v1.8.0 is newer than daemon"},
+		{"v1.8.0", "plugin v1.8.0 is newer than daemon"},
+		{" 1.8.0 ", "plugin v1.8.0 is newer than daemon"},
+		{"v1.6.0", "plugin v1.6.0 does not match daemon"},
+	}
+	for _, test := range tests {
+		var watch versionWatch
+		warning := watch.observe(test.plugin)
+		if !strings.Contains(warning, test.expected) {
+			t.Fatalf("observe(%q) renders the reported version badly: %q", test.plugin, warning)
+		}
+		if strings.Contains(warning, "vv") {
+			t.Fatalf("observe(%q) doubled the v prefix: %q", test.plugin, warning)
+		}
+	}
+}
+
 func TestTimelineTrackerPreservesProgressAndDetectsSeek(t *testing.T) {
 	tracker := timelineTracker{}
 	first := tracker.Accept(playback.State{Status: "playing", Title: "Track", Path: "track", Duration: 200, Position: 10, ObservedAt: 1000})

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
@@ -17,6 +18,24 @@ import (
 )
 
 const presenceRefresh = 15 * time.Second
+
+const (
+	repository = "fazaimron27/cliamp-plugin-discord-rpc"
+	rawBase    = "https://raw.githubusercontent.com/" + repository + "/"
+)
+
+// normalize trims a plugin-reported version and drops any leading "v". The value
+// arrives from the plugin, so it may carry the prefix, surrounding space, or
+// neither, and it is rendered into log lines as well as URLs.
+func normalize(value string) string {
+	return strings.TrimPrefix(strings.TrimSpace(value), "v")
+}
+
+// tag renders a reported version as a release tag, carrying exactly one leading
+// "v".
+func tag(value string) string {
+	return "v" + normalize(value)
+}
 
 // versionWatch reports a plugin/daemon release-line mismatch once per distinct
 // plugin version. Repeating it on every snapshot would bury the genuine error
@@ -33,13 +52,23 @@ func (w *versionWatch) observe(pluginVersion string) string {
 		return ""
 	}
 	w.reported = pluginVersion
-	if !version.Mismatch(pluginVersion, version.Number) {
+	switch version.Relate(pluginVersion, version.Number) {
+	case version.PluginBehind:
+		return fmt.Sprintf(
+			"discord-rpc plugin v%s does not match daemon v%s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install %s@v%s",
+			normalize(pluginVersion), version.Number, repository, version.Number,
+		)
+	case version.DaemonBehind:
+		// Naming the half that is behind matters here: this daemon is usually a
+		// source build running ahead of the installed plugin, and pointing that
+		// user at the plugin would have them downgrade the half that is current.
+		return fmt.Sprintf(
+			"discord-rpc plugin v%s is newer than daemon v%s, so the daemon is the half that is behind. Update cliamp-rpcd with: curl -fsSL %s%s/install.sh | sh (or rebuild from source), then restart it.",
+			normalize(pluginVersion), version.Number, rawBase, tag(pluginVersion),
+		)
+	default:
 		return ""
 	}
-	return fmt.Sprintf(
-		"discord-rpc plugin v%s does not match daemon v%s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v%s",
-		pluginVersion, version.Number, version.Number,
-	)
 }
 
 type discordClient interface {

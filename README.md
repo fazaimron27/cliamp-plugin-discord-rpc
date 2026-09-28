@@ -232,13 +232,28 @@ Run `~/.local/bin/cliamp-rpcd --help` for all daemon options, or
 subscribes to `plugin.discord-rpc.playback` on Cliamp's owner-only local IPC
 socket and reconnects automatically when Cliamp restarts.
 
-If the daemon logs a warning that the plugin version does not match its own,
-the installed plugin and daemon came from different release lines. Install both
-halves at the same version:
+If the daemon logs a warning that the plugin and daemon versions do not match,
+the two halves came from different release lines. The warning names the half that
+is behind and prints the command that updates it, so follow that line. For
+reference:
 
-```sh
-cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.7.0
-```
+- **The plugin is behind.** Install it at the daemon's version, which the warning
+  names:
+
+  ```sh
+  cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.7.0
+  ```
+
+- **The daemon is behind.** This is the usual state when you build the daemon
+  from source and run it behind an already-updated plugin. Rebuild it, or install
+  the released daemon, then restart it:
+
+  ```sh
+  curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.7.0/install.sh | sh
+  ```
+
+Only the major and minor components are compared, so a patch difference stays
+silent. A plugin old enough to omit its version is not warned about at all.
 
 ### Optional systemd user service
 
