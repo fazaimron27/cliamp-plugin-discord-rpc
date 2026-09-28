@@ -171,6 +171,23 @@ func TestVersionWatchReportsMismatchOnce(t *testing.T) {
 	}
 }
 
+// The plugin reports whatever its manifest spells, which may carry the release
+// tag's leading "v" and may carry surrounding space. Both spellings normalize to
+// the same version, so they render the same warning — and a warning that renders
+// identically is the duplicate the watch exists to suppress.
+func TestVersionWatchReportsAnEquivalentVersionOnce(t *testing.T) {
+	older := olderLine(t)
+	var watch versionWatch
+	if warning := watch.observe(older); warning == "" {
+		t.Fatal("older plugin line produced no warning")
+	}
+	for _, equivalent := range []string{"v" + older, " " + older + " "} {
+		if repeat := watch.observe(equivalent); repeat != "" {
+			t.Fatalf("observe(%q) repeated the warning for %q: %q", equivalent, older, repeat)
+		}
+	}
+}
+
 func TestVersionWatchStaysQuietForCompatiblePlugins(t *testing.T) {
 	// Derived from the daemon's own release rather than hardcoded, so a version
 	// bump cannot leave this fixture asserting a stale pairing. A plugin on the

@@ -47,16 +47,21 @@ type versionWatch struct {
 // observe returns the warning to log for a plugin version, or an empty string
 // when the pairing is compatible, the plugin is too old to report a version, or
 // this version has already been reported.
+//
+// The remembered value is the normalized one, because that is what the warning
+// is written from: two spellings that render the same line are the same report,
+// and deduping on the raw string would print it twice.
 func (w *versionWatch) observe(pluginVersion string) string {
-	if pluginVersion == "" || pluginVersion == w.reported {
+	reported := normalize(pluginVersion)
+	if reported == "" || reported == w.reported {
 		return ""
 	}
-	w.reported = pluginVersion
-	switch version.Relate(pluginVersion, version.Number) {
+	w.reported = reported
+	switch version.Relate(reported, version.Number) {
 	case version.PluginBehind:
 		return fmt.Sprintf(
 			"discord-rpc plugin v%s does not match daemon v%s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install %s@v%s",
-			normalize(pluginVersion), version.Number, repository, version.Number,
+			reported, version.Number, repository, version.Number,
 		)
 	case version.DaemonBehind:
 		// Naming the half that is behind matters here: this daemon is usually a
@@ -64,7 +69,7 @@ func (w *versionWatch) observe(pluginVersion string) string {
 		// user at the plugin would have them downgrade the half that is current.
 		return fmt.Sprintf(
 			"discord-rpc plugin v%s is newer than daemon v%s, so the daemon is the half that is behind. Update cliamp-rpcd with: curl -fsSL %s%s/install.sh | sh (or rebuild from source), then restart it.",
-			normalize(pluginVersion), version.Number, rawBase, tag(pluginVersion),
+			reported, version.Number, rawBase, tag(reported),
 		)
 	default:
 		return ""
