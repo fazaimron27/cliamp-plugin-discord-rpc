@@ -14,6 +14,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -133,7 +134,17 @@ func (t *timelineTracker) Accept(state playback.State) playback.State {
 
 // Run constructs production dependencies and blocks until cancellation.
 func Run(ctx context.Context, cfg config.Config) error {
-	log.Printf("starting cliamp-rpcd %s (Cliamp IPC: %s)", version.Number, cfg.CliampSocket)
+	// The startup line names the source the daemon is about to read, which is
+	// the first thing to check when nothing shows up on Discord.
+	switch cfg.Transport {
+	case config.TransportFile:
+		log.Printf("starting cliamp-rpcd %s (state file: %s)", version.Number, cfg.StatePath)
+	default:
+		log.Printf("starting cliamp-rpcd %s (Cliamp IPC: %s)", version.Number, cfg.CliampSocket)
+	}
+	if warning := cfg.TransportWarning(); warning != "" {
+		log.Print(warning)
+	}
 	if cfg.LastFMAPIKey == "" {
 		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
@@ -195,6 +206,22 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		if duration > 0 {
 			timer.Reset(duration)
 		}
+	}
+
+	// The two transports differ in the call that starts reading and in what the
+	// log calls it. Everything downstream sees the same channel of snapshots.
+	// A Cliamp that cannot be reached at all is a failed subscribe on either
+	// one, so the retry below covers both: the file transport fails while the
+	// directory its document lives in does not exist yet.
+	subscribe := func(ctx context.Context) (<-chan playback.State, error) {
+		if cfg.Transport == config.TransportFile {
+			return statewatch.Subscribe(ctx, cfg.StatePath, cfg.StateMaxAge)
+		}
+		return cliampipc.Subscribe(ctx, cfg.CliampSocket)
+	}
+	subscription := "subscribed to Cliamp playback events"
+	if cfg.Transport == config.TransportFile {
+		subscription = fmt.Sprintf("watching for Cliamp state in %s", cfg.StatePath)
 	}
 
 	clear := func() {
@@ -261,7 +288,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			clear()
 			return nil
 		case <-cliampTimer.C:
-			stream, err := cliampipc.Subscribe(ctx, cfg.CliampSocket)
+			stream, err := subscribe(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					clear()
@@ -274,7 +301,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			}
 			states = stream
 			reconnectDelay = time.Second
-			log.Printf("subscribed to Cliamp playback events")
+			log.Print(subscription)
 		case state, ok := <-states:
 			if !ok {
 				states = nil
