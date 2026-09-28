@@ -125,11 +125,11 @@ channel stays open for the daemon's lifetime, because a closed channel means
 "reconnect" to the run loop and there is nothing to reconnect. This is the same
 route a `stopped` payload takes over IPC: the activity is cleared.
 
-The `file` transport therefore also reads the documents release v1.4.0 writes:
-same field names, same schema, same default path. A Cliamp build without the
-pub/sub API can run this daemon with the pinned v1.4.0 plugin. Legacy documents
-carry no `plugin_version`, so the version warning stays silent for them, exactly
-as it does for an `ipc` snapshot from a plugin that predates the report.
+The `file` transport therefore also reads the documents release v1.4.0 wrote:
+same field names, same schema, same default path, so an install that still has
+one keeps working across the upgrade. Documents from that line carry no
+`plugin_version`, so the version warning stays silent for them, exactly as it
+does for an `ipc` snapshot from a plugin that predates the report.
 
 ## Repository Layout
 

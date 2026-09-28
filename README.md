@@ -23,16 +23,10 @@ with a structured `invalid_version` error. Use one of these combinations:
   version 2 IPC cutover ([`c75cdec`](https://github.com/bjarneo/cliamp/commit/c75cdec)),
   then install this project's `v1.8.0` plugin and daemon.
 - **An older Cliamp with the v1.8.0 daemon:** configure the
-  [`file` transport](#choose-the-playback-transport). The daemon reads the state
-  document the pinned v1.4.0 plugin writes — same field names, same schema, same
-  path — so a Cliamp build without the pub/sub API can run the
-  [pinned v1.4.0 plugin](#legacy-v140-for-older-cliamp-releases) with this
-  daemon. It requires no `p:publish()`.
-- **Older official Cliamp releases:** use this project's legacy
-  [`v1.4.0`](https://github.com/fazaimron27/cliamp-plugin-discord-rpc/releases/tag/v1.4.0),
-  which transports playback through `rpc-state.json` and does not require the
-  pub/sub API. Follow the [pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases)
-  below.
+  [`file` transport](#choose-the-playback-transport). The plugin writes the
+  state document instead of publishing it and the daemon reads it, so a Cliamp
+  build without the pub/sub API runs the same plugin and daemon as any other.
+  It requires no `p:publish()`.
 
 The Lua plugin and daemon must use the same release line, unless the transport
 is set to match them across the two as described below. Do not install the
@@ -40,8 +34,6 @@ v1.8.0 Lua plugin into a Cliamp build that lacks `p:publish()` while that plugin
 is left on the default transport: its event handlers will fail when they try to
 publish, and no playback events will reach the daemon. Set
 [`transport = "file"`](#choose-the-playback-transport) for such a build instead.
-`v1.5.0` is superseded: its daemon sends the retired version 1 envelope and
-cannot subscribe to a current Cliamp socket at all.
 
 ## Prerequisites
 
@@ -151,25 +143,6 @@ daemon and unit file, and preserves the Cliamp plugin and configuration. Use
 `--bin-dir` and `--service-dir` if you installed to custom locations. Continue
 at [Start and verify](#start-and-verify).
 
-## Legacy v1.4.0 for older Cliamp releases
-
-If you want to keep an official Cliamp build without plugin pub/sub, pin both
-parts of this project to v1.4.0:
-
-```sh
-cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.4.0
-cliamp plugins trust discord-rpc
-curl -fsSL https://raw.githubusercontent.com/fazaimron27/cliamp-plugin-discord-rpc/v1.4.0/install.sh | sh
-```
-
-Restart Cliamp after trusting the plugin. If another `discord-rpc` version is
-already installed, remove it first with `cliamp plugins remove discord-rpc`.
-The v1.4.0 pair uses `rpc-state.json` rather than the pub/sub API, so do not run
-the v1.4.0 daemon with the v1.8.0 plugin, and do not leave the v1.4.0 plugin on
-the default transport with a Cliamp build that lacks `p:publish()`. The mixture
-that does work is the v1.8.0 daemon reading what the v1.4.0 plugin writes:
-configure it for the [`file` transport](#choose-the-playback-transport).
-
 ## Self-deploy from source
 
 Use this path for development, an architecture without a prebuilt archive, or
@@ -209,8 +182,8 @@ run `cliamp plugins trust discord-rpc` again to approve its new hash, then
 restart Cliamp. If startup reports `attempt to call a non-function object` for
 `publish`, or the daemon logs `subscribe to Cliamp events:` with
 `invalid_version`, verify that you installed a Cliamp build from the official
-`main` branch after the version 2 IPC cutover. Otherwise follow the
-[pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases).
+`main` branch after the version 2 IPC cutover, or switch to the
+[`file` transport](#choose-the-playback-transport), which needs no `p:publish()`.
 
 ## Start and verify
 
@@ -439,8 +412,9 @@ journalctl --user -u cliamp-rpcd -n 20
 [retained plugin event pub/sub merge](https://github.com/bjarneo/cliamp/commit/f373776d).
 In both cases rebuild `cliamp` from that branch, reinstall and trust
 `discord-rpc.lua`, then restart Cliamp. If you want to stay on an older tagged
-Cliamp release, follow the
-[pinned v1.4.0 installation](#legacy-v140-for-older-cliamp-releases) instead.
+Cliamp release, switch to the
+[`file` transport](#choose-the-playback-transport) instead, which needs no
+pub/sub API.
 
 ### The service fails immediately
 

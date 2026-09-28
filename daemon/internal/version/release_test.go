@@ -62,15 +62,20 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 	t.Run("documentation", func(t *testing.T) {
 		source := repoFile(t, "README.md")
 		// Derived from the current release rather than hardcoded, so a pin left
-		// behind by a partial bump is rejected instead of tolerated.
+		// behind by a partial bump is rejected instead of tolerated. The allowed
+		// set holds the current release and nothing else: it used to carry
+		// v1.4.0 and v1.5.0 as sanctioned legacy references, which meant a
+		// document that still recommended a retired line satisfied the guard
+		// that was supposed to notice a stale pin. A retired line is not a
+		// permitted pin, so recommending one again fails here.
 		allowed := map[string]bool{
 			"v" + number: true, // the current release
-			"v1.4.0":     true, // the sanctioned pinned-legacy installation
-			"v1.5.0":     true, // named in prose as superseded
 		}
-		for _, found := range regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+`).FindAllString(source, -1) {
+		for _, loc := range regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+`).FindAllStringIndex(source, -1) {
+			found := source[loc[0]:loc[1]]
 			if !allowed[found] {
-				t.Errorf("README.md pins %s, which is neither the current release nor a sanctioned legacy reference", found)
+				line := 1 + strings.Count(source[:loc[0]], "\n")
+				t.Errorf("README.md:%d pins %s, which is not the current release", line, found)
 			}
 		}
 
