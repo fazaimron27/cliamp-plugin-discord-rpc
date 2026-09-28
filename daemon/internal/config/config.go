@@ -16,6 +16,10 @@ const DefaultApplicationID = "1537329890829926400"
 
 // Config contains all runtime settings needed by the daemon.
 type Config struct {
+	// ShowVersion asks the caller to print the version and exit instead of
+	// running the daemon.
+	ShowVersion bool
+
 	ApplicationID string
 	CliampSocket  string
 	CliampConfig  string
@@ -38,6 +42,7 @@ func Load(args []string) (Config, error) {
 	flags.Usage = func() {
 		writeUsage(flags)
 	}
+	flags.BoolVar(&cfg.ShowVersion, "version", false, "print the version and exit")
 	flags.StringVar(&cfg.ApplicationID, "app-id", os.Getenv("CLIAMP_DISCORD_APP_ID"), "Discord application `ID` (or CLIAMP_DISCORD_APP_ID)")
 	flags.StringVar(&cfg.CliampSocket, "socket", filepath.Join(home, ".config", "cliamp", "cliamp.sock"), "Cliamp IPC socket `path`")
 	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file `path` containing Discord RPC credentials")
@@ -78,8 +83,10 @@ func writeUsage(flags *flag.FlagSet) {
 		if valueName != "" {
 			valueName = " " + valueName
 		}
+		// A boolean flag's zero value is not worth printing as a default.
+		boolean, isBoolean := option.Value.(interface{ IsBoolFlag() bool })
 		defaultValue := ""
-		if option.Name != "app-id" && option.DefValue != "" {
+		if option.Name != "app-id" && option.DefValue != "" && !(isBoolean && boolean.IsBoolFlag()) {
 			defaultValue = fmt.Sprintf(" (default %q)", option.DefValue)
 		}
 		fmt.Fprintf(writer, "  --%s%s\t%s%s\n", option.Name, valueName, usage, defaultValue)

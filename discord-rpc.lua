@@ -3,9 +3,14 @@
 -- Playback state stays in memory and is delivered over Cliamp's local IPC
 -- pub/sub stream. A separate daemon owns Discord IPC.
 
+-- Single source of truth for this plugin's release. The manifest and every
+-- published snapshot must agree, and cliamp-rpcd warns when its own release
+-- line differs from the value published here.
+local VERSION = "1.6.1"
+
 local p = plugin.register({
   name = "discord-rpc",
-  version = "1.6.1",
+  version = VERSION,
   description = "Publish playback events for the cliamp-rpcd Discord bridge",
   type = "hook",
 })
@@ -38,6 +43,7 @@ local function publish(event, forced_status)
     duration = toint(value(event, "duration", cliamp.player.duration), 0),
     position = toint(value(event, "position", cliamp.player.position), 0),
     stream = value(event, "stream", cliamp.track.is_stream) and true or false,
+    plugin_version = VERSION,
   }, { retain = true })
   if not ok then
     cliamp.log.error("discord-rpc: publish failed: " .. tostring(err))

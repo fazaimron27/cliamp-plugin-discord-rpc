@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -12,9 +13,34 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
 const presenceRefresh = 15 * time.Second
+
+// versionWatch reports a plugin/daemon release-line mismatch once per distinct
+// plugin version. Repeating it on every snapshot would bury the genuine error
+// traffic, and a mismatch is a one-time discovery rather than a per-track event.
+type versionWatch struct {
+	reported string
+}
+
+// observe returns the warning to log for a plugin version, or an empty string
+// when the pairing is compatible, the plugin is too old to report a version, or
+// this version has already been reported.
+func (w *versionWatch) observe(pluginVersion string) string {
+	if pluginVersion == "" || pluginVersion == w.reported {
+		return ""
+	}
+	w.reported = pluginVersion
+	if !version.Mismatch(pluginVersion, version.Number) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"discord-rpc plugin v%s does not match daemon v%s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v%s",
+		pluginVersion, version.Number, version.Number,
+	)
+}
 
 type discordClient interface {
 	Connected() bool
@@ -67,7 +93,7 @@ func (t *timelineTracker) Accept(state playback.State) playback.State {
 
 // Run constructs production dependencies and blocks until cancellation.
 func Run(ctx context.Context, cfg config.Config) error {
-	log.Printf("starting cliamp-rpcd (Cliamp IPC: %s)", cfg.CliampSocket)
+	log.Printf("starting cliamp-rpcd %s (Cliamp IPC: %s)", version.Number, cfg.CliampSocket)
 	if cfg.LastFMAPIKey == "" {
 		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
@@ -84,6 +110,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	var publishedKey string
 	var publishedAt time.Time
 	reconnectDelay := time.Second
+	var watch versionWatch
 
 	refreshTimer := time.NewTimer(time.Hour)
 	if !refreshTimer.Stop() {
@@ -149,6 +176,9 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	}
 
 	accept := func(state playback.State) {
+		if warning := watch.observe(state.PluginVersion); warning != "" {
+			log.Print(warning)
+		}
 		lastState = tracker.Accept(state)
 		haveState = true
 		reconcile()

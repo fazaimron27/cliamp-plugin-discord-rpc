@@ -215,21 +215,30 @@ A successful startup looks like this:
 
 ```text
 $ cliamp-rpcd
-2026/08/14 15:29:59 starting cliamp-rpcd (Cliamp IPC: /home/faza/.config/cliamp/cliamp.sock)
+2026/08/14 15:29:59 starting cliamp-rpcd 1.6.1 (Cliamp IPC: /home/faza/.config/cliamp/cliamp.sock)
 2026/08/14 15:30:14 subscribed to Cliamp playback events
 2026/08/14 15:30:18 connected to Discord at /run/user/1000/discord-ipc-0
 ```
 
-The subscription line confirms the Lua plugin-to-daemon event stream. The
-Discord line confirms the local Rich Presence connection. A playing track
-should then appear on your Discord profile. Keep this terminal open while using
-the daemon and press `Ctrl+C` to stop it. Pausing or stopping playback clears
-the activity, and the daemon reconnects automatically if Discord is started or
-restarted later.
+The first line reports the daemon's release. The subscription line confirms the
+Lua plugin-to-daemon event stream, and the Discord line confirms the local Rich
+Presence connection. A playing track should then appear on your Discord profile.
+Keep this terminal open while using the daemon and press `Ctrl+C` to stop it.
+Pausing or stopping playback clears the activity, and the daemon reconnects
+automatically if Discord is started or restarted later.
 
-Run `~/.local/bin/cliamp-rpcd --help` for all daemon options. The daemon
+Run `~/.local/bin/cliamp-rpcd --help` for all daemon options, or
+`~/.local/bin/cliamp-rpcd --version` to print the release and exit. The daemon
 subscribes to `plugin.discord-rpc.playback` on Cliamp's owner-only local IPC
 socket and reconnects automatically when Cliamp restarts.
+
+If the daemon logs a warning that the plugin version does not match its own,
+the installed plugin and daemon came from different release lines. Install both
+halves at the same version:
+
+```sh
+cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.6.1
+```
 
 ### Optional systemd user service
 
