@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// DefaultApplicationID is the community-maintained Cliamp Discord application,
+// used for presence unless a custom ID is supplied through --app-id,
+// CLIAMP_DISCORD_APP_ID, or the plugin section of Cliamp's config file.
 const DefaultApplicationID = "1537329890829926400"
 
 // The two playback event transports. IPC is the retained pub/sub stream that

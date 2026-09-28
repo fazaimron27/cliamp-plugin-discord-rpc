@@ -74,6 +74,9 @@ func WithClock(now func() time.Time) Option {
 	return func(resolver *LastFM) { resolver.now = now }
 }
 
+// NewLastFM returns a resolver for the given API key. The options override the
+// defaults it sets up: Last.fm's public track.getInfo endpoint, an HTTP client
+// with a four-second timeout, and the real clock.
 func NewLastFM(apiKey string, options ...Option) *LastFM {
 	resolver := &LastFM{
 		apiKey:   apiKey,

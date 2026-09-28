@@ -101,3 +101,16 @@ with `version.Number`, because a stale pin in `install.sh` ships an archive whos
 bundled installer downloads the previous daemon. It scans the two documentation
 files by name, so a version pinned in a *new* file needs adding to that list, or
 it is a pin nothing checks.
+
+## Comment convention
+
+Comments are written in one voice across the repository, and that voice is
+written down in the [comment convention](comments.md): the rules, the two
+exemptions the tree itself proves are needed, and the two parts deliberately
+left to review because no syntax tree can judge them. A guard test in
+`daemon/internal/style` enforces the mechanical ones, so it runs with the rest
+of the suite and a breach cannot land unnoticed.
+
+Both documents exist for the same reason as the release pins above: a rule
+nothing reads is a rule that drifts, and a comment convention with no guard is
+a preference.

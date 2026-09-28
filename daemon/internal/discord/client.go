@@ -28,10 +28,14 @@ type Client struct {
 	nonce         uint64
 }
 
+// NewClient returns a client for the Discord application with no connection
+// open. Connect discovers the socket and completes the handshake.
 func NewClient(applicationID string) *Client {
 	return &Client{applicationID: applicationID}
 }
 
+// Connected reports whether a connection is currently open. It only answers the
+// question; Connect is what repairs a client that reads false.
 func (c *Client) Connected() bool { return c.conn != nil }
 
 // Connect probes known socket locations and completes Discord's handshake.
@@ -85,14 +89,20 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 }
 
+// SetActivity publishes an activity, replacing whatever Discord is showing.
 func (c *Client) SetActivity(activity *presence.Activity) error {
 	return c.setActivity(activity)
 }
 
+// ClearActivity removes the current activity. It is how pause and stop are
+// reported: Discord cannot freeze an activity's timer, so a cleared card is
+// what reads as paused.
 func (c *Client) ClearActivity() error {
 	return c.setActivity(nil)
 }
 
+// Close ends the connection if one is open, and is safe on a client that never
+// connected.
 func (c *Client) Close() error {
 	if c.conn == nil {
 		return nil

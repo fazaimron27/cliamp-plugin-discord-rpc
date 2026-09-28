@@ -14,6 +14,10 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 )
 
+// PlaybackTopic is the retained pub/sub topic the plugin publishes playback
+// snapshots on. Cliamp builds the plugin.discord-rpc.* namespace from the
+// installed plugin's filename rather than from anything the plugin sends, so
+// this name cannot be used to impersonate another plugin.
 const PlaybackTopic = "plugin.discord-rpc.playback"
 
 // protocolVersion is the mandatory Cliamp IPC envelope version. Cliamp rejects

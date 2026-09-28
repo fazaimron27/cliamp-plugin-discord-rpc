@@ -110,6 +110,11 @@ type timelineTracker struct {
 	nowUnix func() int64
 }
 
+// Accept stamps a snapshot with the time it was observed and decides where its
+// progress timeline starts. A playing snapshot whose position has advanced
+// naturally from the previous one keeps the existing anchor, so the bar holds
+// still instead of being re-anchored on every event; a track change, a seek, or
+// a resume anchors it afresh.
 func (t *timelineTracker) Accept(state playback.State) playback.State {
 	observed := state.ObservedAt
 	if observed <= 0 {

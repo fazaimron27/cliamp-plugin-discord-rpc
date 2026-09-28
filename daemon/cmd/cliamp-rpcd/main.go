@@ -1,3 +1,7 @@
+// Command cliamp-rpcd mirrors Cliamp playback into a Discord Rich Presence
+// activity. It reads its configuration once at startup and then runs until
+// interrupted, clearing the activity on its way out; the --version and --check
+// flags report and exit without starting the run loop.
 package main
 
 import (
