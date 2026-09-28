@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -32,33 +30,6 @@ func (unreachableDiscord) Connect(context.Context) error {
 func (unreachableDiscord) SetActivity(*presence.Activity) error { return nil }
 func (unreachableDiscord) ClearActivity() error                 { return nil }
 func (unreachableDiscord) Close() error                         { return nil }
-
-// newerLine and olderLine derive an adjacent release line from the daemon's own
-// instead of hardcoding one, so a version bump cannot leave a fixture asserting
-// a pairing that is no longer adjacent. The version-watch fixtures in
-// daemon_test.go rely on the same derivation.
-func newerLine(t *testing.T) string {
-	t.Helper()
-	return adjacentLine(t, 1)
-}
-
-func olderLine(t *testing.T) string {
-	t.Helper()
-	return adjacentLine(t, -1)
-}
-
-func adjacentLine(t *testing.T, delta int) string {
-	t.Helper()
-	parts := strings.SplitN(version.Number, ".", 3)
-	if len(parts) < 2 {
-		t.Fatalf("version.Number %q is not major.minor", version.Number)
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		t.Fatalf("version.Number %q has a non-numeric minor: %v", version.Number, err)
-	}
-	return fmt.Sprintf("%s.%d.0", parts[0], minor+delta)
-}
 
 // serveCheckCliamp stands up the v2 handshake harness on a fresh socket and
 // returns the socket path. The harness replays one snapshot carrying
