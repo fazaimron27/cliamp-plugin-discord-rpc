@@ -41,6 +41,15 @@ func TestPlaybackPresenceKey(t *testing.T) {
 	}
 }
 
+func TestPlaybackPresenceKeyTracksStreamFlag(t *testing.T) {
+	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Duration: 200, StartedAt: 900}
+	want := state.PresenceKey()
+	state.Stream = true
+	if got := state.PresenceKey(); got == want {
+		t.Fatal("changed stream flag did not change presence key")
+	}
+}
+
 func TestPlaybackValidation(t *testing.T) {
 	valid := playback.State{Status: "playing", Title: "Track", Duration: 10, Position: 2, Year: 2020}
 	if err := valid.Validate(); err != nil {

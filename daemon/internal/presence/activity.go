@@ -2,6 +2,7 @@
 package presence
 
 import (
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,12 +16,14 @@ const (
 	maxFieldBytes         = 128
 	maxDetailsRunes       = 48
 	maxStateRunes         = 40
+
+	getCliampLabel = "Get Cliamp"
+	getCliampURL   = "https://www.cliamp.stream/"
+	trackLabel     = "View on Last.fm"
+	trackSearchURL = "https://www.last.fm/search"
 )
 
-var staticButtons = []Button{
-	{Label: "Get Cliamp", URL: "https://www.cliamp.stream/"},
-	{Label: "View Plugin", URL: "https://github.com/fazaimron27/cliamp-plugin-discord-rpc"},
-}
+var getCliampButton = Button{Label: getCliampLabel, URL: getCliampURL}
 
 // Options controls the static fallback asset shown when artwork is unavailable.
 type Options struct {
@@ -38,6 +41,23 @@ type Activity struct {
 	Assets            *Assets     `json:"assets,omitempty"`
 	Timestamps        *Timestamps `json:"timestamps,omitempty"`
 	Buttons           []Button    `json:"buttons,omitempty"`
+}
+
+// buttons returns the CTA pair for a snapshot: a track link when the metadata
+// identifies a song, then the app link. Discord renders at most two buttons,
+// and a stream carries no stable track identity to look up.
+func buttons(s playback.State) []Button {
+	artist := strings.TrimSpace(s.Artist)
+	title := strings.TrimSpace(s.Title)
+	if s.Stream || artist == "" || title == "" {
+		return []Button{getCliampButton}
+	}
+	query := url.Values{}
+	query.Set("q", artist+" "+title)
+	return []Button{
+		{Label: trackLabel, URL: trackSearchURL + "?" + query.Encode()},
+		getCliampButton,
+	}
 }
 
 type Assets struct {
@@ -68,7 +88,7 @@ func Build(s playback.State, options Options, artworkURL string, now time.Time) 
 		Details:           truncateRunes(s.Title, maxDetailsRunes),
 		State:             truncateRunes(artist, maxStateRunes),
 		StatusDisplayType: statusDisplayState,
-		Buttons:           append([]Button(nil), staticButtons...),
+		Buttons:           buttons(s),
 	}
 
 	if artworkURL != "" {

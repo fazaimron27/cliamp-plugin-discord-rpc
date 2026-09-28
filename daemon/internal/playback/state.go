@@ -60,5 +60,6 @@ func (s State) PresenceKey() string {
 	return strings.Join([]string{
 		s.Status, s.Title, s.Artist, s.Album,
 		strconv.FormatInt(s.Duration, 10), strconv.FormatInt(s.StartedAt, 10),
+		strconv.FormatBool(s.Stream),
 	}, "\x00")
 }
