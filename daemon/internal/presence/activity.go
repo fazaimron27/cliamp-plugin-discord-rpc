@@ -1,6 +1,11 @@
 // Package presence derives Discord activity payloads from playback state.
 package presence
 
+// This file is the presence payload. The Activity envelope and the Assets,
+// Timestamps, and Button structs beneath it mirror the SET_ACTIVITY object
+// Discord accepts, and Build fills them from a playback snapshot: the truncated
+// text, the fallback asset, the buttons, and the timeline anchor.
+
 import (
 	"net/url"
 	"strings"
@@ -60,16 +65,24 @@ func buttons(s playback.State) []Button {
 	}
 }
 
+// Assets is the payload's asset object: the image Discord shows on the card
+// and the text that appears when it is hovered. Build fills it with resolved
+// album art, or with the configured fallback asset.
 type Assets struct {
 	LargeImage string `json:"large_image,omitempty"`
 	LargeText  string `json:"large_text,omitempty"`
 }
 
+// Timestamps is the payload's timeline object, in Unix seconds. Discord
+// advances the bar between updates, so the daemon sends the two endpoints
+// rather than republishing a position.
 type Timestamps struct {
 	Start int64 `json:"start"`
 	End   int64 `json:"end"`
 }
 
+// Button is one link button on the card. Discord renders at most two, which is
+// the limit buttons builds its pair against.
 type Button struct {
 	Label string `json:"label"`
 	URL   string `json:"url"`

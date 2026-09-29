@@ -1,3 +1,13 @@
+# cliamp-rpcd as a systemd user service. It belongs to the user session because
+# that is where Cliamp's IPC socket and the plugin's state document live, and its
+# own credentials are read from the user's config.toml.
+#
+# The hardening below is sized for a process that reads a socket, watches a file,
+# and makes outbound HTTPS calls, and does nothing else: it may not write the
+# system, gain privileges, or load kernel modules. ProtectHome is read-only
+# rather than off because the state document and the configuration are both under
+# the home directory, and the address families are limited to the local sockets
+# and the internet connections those two jobs need.
 [Unit]
 Description=Cliamp Discord Rich Presence bridge
 After=graphical-session.target

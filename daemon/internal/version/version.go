@@ -1,6 +1,11 @@
 // Package version is the release identity of the daemon and its Cliamp plugin.
 package version
 
+// This file is that identity: the one version constant the Lua manifest, the
+// release tag, and the bundled installer all restate, plus the functions that
+// compare a plugin's release line against the daemon's and word the result for
+// the daemon's warning and the --check report.
+
 import (
 	"fmt"
 	"strconv"
@@ -52,6 +57,10 @@ func (r Relation) String() string {
 // A version that is absent or unparseable reports Unknown. A plugin old enough to
 // omit its version predates the report, and warning about a value it never sent
 // would only produce an alert the user cannot act on.
+//
+// Each component is compared numerically rather than as the string that renders
+// it: "1.10" sorts before "1.7" as text, so a string comparison would invert a
+// two-digit minor and call the newer release the older one.
 func Relate(pluginVersion, daemonVersion string) Relation {
 	pluginMajor, pluginMinor, pluginOK := releaseLine(pluginVersion)
 	daemonMajor, daemonMinor, daemonOK := releaseLine(daemonVersion)
@@ -61,8 +70,6 @@ func Relate(pluginVersion, daemonVersion string) Relation {
 	if pluginMajor == daemonMajor && pluginMinor == daemonMinor {
 		return Same
 	}
-	// Compare numerically: minor 10 is later than minor 7, which a comparison of
-	// the rendered "1.10" and "1.7" strings would invert.
 	if pluginMajor != daemonMajor {
 		if pluginMajor < daemonMajor {
 			return PluginBehind

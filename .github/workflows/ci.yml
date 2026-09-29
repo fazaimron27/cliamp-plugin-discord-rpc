@@ -1,3 +1,10 @@
+# The gate every change passes: it runs the Go suite with the Lua contract tests
+# required rather than skipped, lints the shell scripts and the shipped plugin,
+# and builds the daemon. A failure here is what blocks a pull request, since this
+# job's name is the required status check on main.
+#
+# The comments below are attached to the steps they explain, which is where a
+# reader looks for them; the width bound and the sentence rules still apply.
 name: CI
 
 on:

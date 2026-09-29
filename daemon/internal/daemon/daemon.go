@@ -1,6 +1,17 @@
 // Package daemon coordinates Cliamp event subscriptions, artwork, and Discord IPC.
 package daemon
 
+// This file is the daemon's run loop: it subscribes to one of the two playback
+// transports, turns snapshots into Discord activity, and keeps that activity
+// alive until the context is cancelled.
+//
+// The loop is single-threaded and its shape is a select over timers and
+// channels rather than a sequence of blocking calls, because everything it talks
+// to is slow. A subscribe that fails, a stream that ends, and a Discord call that
+// errors all reschedule a timer and come round again, so a Cliamp restart or a
+// dropped socket is an event on the subscription rather than the end of the
+// process.
+
 import (
 	"context"
 	"fmt"
@@ -55,6 +66,12 @@ type versionWatch struct {
 // The remembered value is the normalized one, because that is what the warning
 // is written from: two spellings that render the same line are the same report,
 // and deduping on the raw string would print it twice.
+//
+// The sentence it returns is the same one the --check report prints; only the
+// remedy differs, because only this consumer knows that it is running. Naming
+// the half that is behind is the point of that remedy: this daemon is usually a
+// source build running ahead of the installed plugin, so a warning that always
+// pointed at the plugin would have that user downgrade the half that is current.
 func (w *versionWatch) observe(pluginVersion string) string {
 	reported := normalize(pluginVersion)
 	if reported == "" || reported == w.reported {
@@ -62,8 +79,6 @@ func (w *versionWatch) observe(pluginVersion string) string {
 	}
 	w.reported = reported
 	relation := version.Relate(reported, version.Number)
-	// The sentence is the same one the --check report prints; only the remedy
-	// differs, because only this consumer knows when it is running.
 	explained := version.Explain(relation, reported, version.Number)
 	switch relation {
 	case version.PluginBehind:
@@ -72,9 +87,6 @@ func (w *versionWatch) observe(pluginVersion string) string {
 			explained, repository, version.Number,
 		)
 	case version.DaemonBehind:
-		// Naming the half that is behind matters here: this daemon is usually a
-		// source build running ahead of the installed plugin, and pointing that
-		// user at the plugin would have them downgrade the half that is current.
 		return fmt.Sprintf(
 			"discord-rpc %s. Update cliamp-rpcd with: curl -fsSL %s%s/install.sh | sh (or rebuild from source), then restart it.",
 			explained, rawBase, tag(reported),
@@ -110,6 +122,11 @@ type timelineTracker struct {
 	nowUnix func() int64
 }
 
+// Accept stamps a snapshot with the time it was observed and decides where its
+// progress timeline starts. A playing snapshot whose position has advanced
+// naturally from the previous one keeps the existing anchor, so the bar holds
+// still instead of being re-anchored on every event; a track change, a seek, or
+// a resume anchors it afresh.
 func (t *timelineTracker) Accept(state playback.State) playback.State {
 	observed := state.ObservedAt
 	if observed <= 0 {
@@ -142,9 +159,10 @@ func (t *timelineTracker) Accept(state playback.State) playback.State {
 }
 
 // Run constructs production dependencies and blocks until cancellation.
+//
+// The line it logs at startup names the source it is about to read, which is the
+// first thing to check when nothing shows up on Discord.
 func Run(ctx context.Context, cfg config.Config) error {
-	// The startup line names the source the daemon is about to read, which is
-	// the first thing to check when nothing shows up on Discord.
 	switch cfg.Transport {
 	case config.TransportFile:
 		log.Printf("starting cliamp-rpcd %s (state file: %s)", version.Number, cfg.StatePath)
@@ -163,6 +181,34 @@ func Run(ctx context.Context, cfg config.Config) error {
 // run is the daemon's event loop. refresh is a parameter rather than the
 // presenceRefresh constant so a test can drive the loop's timed behavior without
 // waiting out the real interval; production passes the constant.
+//
+// The two transports differ in the call that starts reading and in what the log
+// calls it; everything downstream sees the same channel of snapshots. A Cliamp
+// that cannot be reached at all is a failed subscribe on either one, so the retry
+// below covers both — the file transport fails while the directory its document
+// lives in does not exist yet.
+//
+// Artwork is looked up by a goroutine and delivered back here as a result tagged
+// with the track it was asked about. The tag is what lets the loop discard an
+// answer that arrived after the track changed, and the sending side abandons its
+// send when the loop is gone, since a send with no reader left would outlive it.
+//
+// The loop remembers what it last knew about the artwork of the track it is
+// showing. The resolver caches too, but asking it is only cheap when it already
+// has the answer, so the loop asks on a track change and on the refresh rather
+// than on every reconcile. A different track drops the previous answer rather
+// than showing it, publishes with what is known now, and lets the reply
+// republish: waiting there is what made a pause or a skip queue behind the
+// network.
+//
+// An empty answer is remembered for its track rather than retried, because an
+// answer must not be able to ask for itself — the loop would re-ask on every
+// reply. That leaves the refresh as the one event no answer can cause, and so
+// the only place a lookup that came back with nothing may be tried again, which
+// is what lets a track recover from a request that failed or that ran before
+// Last.fm had the artwork. The refresh passes artworkTrack as the identity to
+// match the reply against, not as the artist: it names the track the loop is
+// currently showing.
 func run(ctx context.Context, cfg config.Config, client discordClient, resolver artworkResolver, now func() time.Time, refresh time.Duration) error {
 	defer client.Close()
 
@@ -175,14 +221,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	reconnectDelay := time.Second
 	var watch versionWatch
 
-	// Artwork is looked up by a goroutine and delivered here. A request can take
-	// the resolver's whole HTTP timeout, and this loop is the only thing that
-	// talks to Discord, so waiting for one inline would queue every pause, stop
-	// and track change behind Last.fm.
 	resolved := make(chan artworkResult, 1)
-	// What the loop knows about the track it is showing. The resolver caches too,
-	// but asking it is only cheap when it already has the answer, so the loop asks
-	// on a track change and on the refresh rather than on every reconcile.
 	var artworkTrack string
 	var artworkImage string
 
@@ -191,7 +230,6 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			image, err := resolver.Resolve(ctx, artist, title)
 			select {
 			case resolved <- artworkResult{track: track, image: image, err: err}:
-			// A send with no reader left would outlive the loop.
 			case <-ctx.Done():
 			}
 		}()
@@ -217,11 +255,6 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		}
 	}
 
-	// The two transports differ in the call that starts reading and in what the
-	// log calls it. Everything downstream sees the same channel of snapshots.
-	// A Cliamp that cannot be reached at all is a failed subscribe on either
-	// one, so the retry below covers both: the file transport fails while the
-	// directory its document lives in does not exist yet.
 	subscribe := func(ctx context.Context) (<-chan playback.State, error) {
 		if cfg.Transport == config.TransportFile {
 			return statewatch.Subscribe(ctx, cfg.StatePath, cfg.StateMaxAge)
@@ -252,9 +285,6 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		}
 		track := lastState.TrackKey()
 		if track != artworkTrack {
-			// A different track. Drop the previous answer rather than showing it,
-			// publish with what is known now, and let the reply republish: waiting
-			// here is what made a pause or a skip queue behind the network.
 			artworkTrack = track
 			artworkImage = ""
 			requestArtwork(track, lastState.Artist, lastState.Title)
@@ -324,28 +354,14 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			accept(state)
 		case result := <-resolved:
 			if result.track != artworkTrack {
-				// The track changed while the lookup was open. Discord is already
-				// showing the new one, so this answer is stale.
 				continue
 			}
 			if result.err != nil {
 				log.Printf("resolve Last.fm artwork: %v", result.err)
 			}
-			// An empty answer is remembered for this track rather than retried
-			// here: an answer must not be able to ask for itself, or the loop
-			// would re-ask on every reply. The resolver's expiry decides when the
-			// next attempt is worth making.
 			artworkImage = result.image
 			reconcile()
 		case <-refreshTimer.C:
-			// The refresh is the one event no answer can cause, so it is the only
-			// place a lookup that came back with nothing may be retried. That is
-			// what lets a track recover from a request that failed or ran before
-			// Last.fm had the artwork, without asking on every reconcile.
-			//
-			// artworkTrack is passed as the identity to match the reply against,
-			// not as the artist: it names the track the loop is currently showing,
-			// which is lastState by the time this fires.
 			if artworkImage == "" && lastState.IsPlaying() {
 				requestArtwork(artworkTrack, lastState.Artist, lastState.Title)
 			}

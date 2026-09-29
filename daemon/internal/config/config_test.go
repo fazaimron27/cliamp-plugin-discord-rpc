@@ -1,5 +1,11 @@
 package config_test
 
+// This file exercises the configuration surface from outside the package: the
+// credentials Load resolves from the built-in default, the dedicated plugin
+// section, the environment, and the command line; how a TOML value carrying an
+// inline comment is read; and the version, check, and help flags. It is the
+// external config_test package, so it sees a caller's view of the API.
+
 import (
 	"errors"
 	"flag"
@@ -12,6 +18,8 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 )
 
+// With no environment and no config file, Load falls back to the built-in
+// application ID and leaves Last.fm scrobbling off.
 func TestConfigUsesBuiltInApplicationID(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
@@ -29,6 +37,8 @@ func TestConfigUsesBuiltInApplicationID(t *testing.T) {
 	}
 }
 
+// Credentials come from the dedicated [plugins.discord-rpc] section, and an
+// unrelated plugin's section holding a like-named key is not mistaken for it.
 func TestConfigUsesDedicatedPluginSection(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -94,6 +104,8 @@ func TestConfigParsesQuotedValueWithInlineComment(t *testing.T) {
 	}
 }
 
+// With both credentials in the environment and no config file, Load uses the
+// environment values rather than the built-in default.
 func TestConfigEnvironmentOverridesFileAndBuiltInDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "env-app")
@@ -107,6 +119,8 @@ func TestConfigEnvironmentOverridesFileAndBuiltInDefault(t *testing.T) {
 	}
 }
 
+// A flag on the command line beats an environment variable set for the same
+// setting.
 func TestConfigCommandLineOverridesEnvironment(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "env-app")
@@ -120,6 +134,7 @@ func TestConfigCommandLineOverridesEnvironment(t *testing.T) {
 	}
 }
 
+// --version requests the version mode, and a load without the flag does not.
 func TestConfigVersionFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg, err := config.Load([]string{"--version"})
@@ -138,6 +153,11 @@ func TestConfigVersionFlag(t *testing.T) {
 	}
 }
 
+// --check requests the diagnostic mode, and a load without a flag requests
+// neither mode.
+//
+// --check and --version are separate modes: asking for one must not trigger the
+// other, or --version would start probing the environment.
 func TestConfigCheckFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg, err := config.Load([]string{"--check"})
@@ -147,8 +167,6 @@ func TestConfigCheckFlag(t *testing.T) {
 	if !cfg.ShowCheck {
 		t.Fatal("--check did not request the diagnostic")
 	}
-	// --check and --version are separate modes: asking for one must not trigger
-	// the other, or `--version` would start probing the environment.
 	if cfg.ShowVersion {
 		t.Fatal("--check also requested the version")
 	}
@@ -161,6 +179,9 @@ func TestConfigCheckFlag(t *testing.T) {
 	}
 }
 
+// --help writes the option list to stderr, and that list names every option
+// with two dashes, hides the application ID, and omits a boolean flag's zero
+// value, which is not a useful default to print.
 func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "secret-app-id")
@@ -197,7 +218,6 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	if strings.Contains(help, "secret-app-id") {
 		t.Errorf("help exposes application ID:\n%s", help)
 	}
-	// A boolean flag's zero value is not a useful default to print.
 	if strings.Contains(help, `(default "false")`) || strings.Contains(help, `(default "true")`) {
 		t.Errorf("help shows a boolean default:\n%s", help)
 	}

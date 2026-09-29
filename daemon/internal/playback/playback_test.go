@@ -1,5 +1,9 @@
 package playback_test
 
+// This file tests the snapshot contract state.go defines: which states count as
+// playing, what a track key and a presence key cover, and which payloads
+// Validate accepts or rejects.
+
 import (
 	"strings"
 	"testing"
@@ -7,6 +11,8 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 )
 
+// IsPlaying is true only for a playing snapshot that names a title; paused,
+// stopped, and titleless snapshots are all not playing.
 func TestPlaybackVisibility(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -27,6 +33,9 @@ func TestPlaybackVisibility(t *testing.T) {
 	}
 }
 
+// A presence key follows the timeline rather than the playhead: advancing the
+// position or the observation time leaves it unchanged, while a new StartedAt
+// moves it.
 func TestPlaybackPresenceKey(t *testing.T) {
 	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Duration: 200, StartedAt: 900}
 	want := state.PresenceKey()
@@ -41,6 +50,8 @@ func TestPlaybackPresenceKey(t *testing.T) {
 	}
 }
 
+// The stream flag is part of the presence key, so a track that starts or stops
+// streaming republishes rather than reusing the previous activity.
 func TestPlaybackPresenceKeyTracksStreamFlag(t *testing.T) {
 	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Duration: 200, StartedAt: 900}
 	want := state.PresenceKey()
@@ -50,12 +61,14 @@ func TestPlaybackPresenceKeyTracksStreamFlag(t *testing.T) {
 	}
 }
 
+// The plugin_version field is optional: a well-formed value validates and a
+// plugin old enough to omit the field still validates, while an oversized or
+// NUL-bearing value does not.
 func TestPlaybackAcceptsPluginVersion(t *testing.T) {
 	valid := playback.State{Status: "playing", Title: "Track", PluginVersion: "1.6.1"}
 	if err := valid.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	// A plugin old enough to omit the field must still validate.
 	if err := (playback.State{Status: "playing", Title: "Track"}).Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +83,8 @@ func TestPlaybackAcceptsPluginVersion(t *testing.T) {
 	}
 }
 
+// A plugin upgrade changes no rendered field, so the plugin version is not part
+// of the presence key and setting it leaves the key unchanged.
 func TestPlaybackPresenceKeyIgnoresPluginVersion(t *testing.T) {
 	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Duration: 200, StartedAt: 900}
 	want := state.PresenceKey()
@@ -79,6 +94,9 @@ func TestPlaybackPresenceKeyIgnoresPluginVersion(t *testing.T) {
 	}
 }
 
+// Validate accepts a well-formed snapshot and rejects an unknown status, a
+// negative duration or position, an out-of-range year, an oversized title, and
+// a NUL in a text field.
 func TestPlaybackValidation(t *testing.T) {
 	valid := playback.State{Status: "playing", Title: "Track", Duration: 10, Position: 2, Year: 2020}
 	if err := valid.Validate(); err != nil {
@@ -99,6 +117,9 @@ func TestPlaybackValidation(t *testing.T) {
 	}
 }
 
+// The track key is built from the private path so two tracks with the same
+// metadata stay distinct, while the presence key never contains the path and so
+// cannot leak it into a Discord payload.
 func TestTrackKeyUsesPrivatePathOnlyForIdentity(t *testing.T) {
 	state := playback.State{Path: "spotify:track:secret", Title: "Track", Artist: "Artist", Duration: 10}
 	if !strings.Contains(state.TrackKey(), state.Path) {

@@ -1,5 +1,11 @@
 package daemon
 
+// This file exercises the --check diagnostic: the healthy report, the redacted
+// application ID, a failed transport that must not mask the one that worked,
+// the Last.fm warnings, the version-skew wording it shares with the run loop,
+// and the config-file probe on a readable path, a directory, an unreadable
+// file, and a missing one.
+
 import (
 	"bytes"
 	"context"
@@ -44,6 +50,9 @@ func serveCheckCliamp(t *testing.T, pluginVersion string) string {
 	return socket
 }
 
+// A healthy environment — a subscribed Cliamp, a reachable Discord, and a
+// configured Last.fm key — exits 0, reports every probe, and names the daemon
+// version without reporting anything failed.
 func TestCheckPassesInAHealthyEnvironment(t *testing.T) {
 	socket := serveCheckCliamp(t, version.Number)
 	cfg := config.Config{
@@ -90,6 +99,9 @@ func TestCheckRedactsTheApplicationID(t *testing.T) {
 	}
 }
 
+// Discord being unreachable fails the check with the report naming the Discord
+// failure, while the Cliamp probe that did succeed stays in the report: one
+// failed transport must not mask the half that worked.
 func TestCheckFailsWhenDiscordIsUnavailable(t *testing.T) {
 	socket := serveCheckCliamp(t, version.Number)
 	cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
@@ -104,12 +116,13 @@ func TestCheckFailsWhenDiscordIsUnavailable(t *testing.T) {
 	if !strings.Contains(report, "discord") || !strings.Contains(report, "fail") {
 		t.Fatalf("report does not name the Discord failure:\n%s", report)
 	}
-	// A transport failure must not mask the half that worked.
 	if !strings.Contains(report, "cliamp") || !strings.Contains(report, "ok") {
 		t.Fatalf("report lost the successful Cliamp probe:\n%s", report)
 	}
 }
 
+// A socket that is not there is the IPC transport's commonest failure, so the
+// report has to name Cliamp rather than leaving the user with an exit code.
 func TestCheckFailsWhenCliampIsUnreachable(t *testing.T) {
 	cfg := config.Config{
 		ApplicationID: config.DefaultApplicationID,
@@ -149,6 +162,9 @@ func TestCheckWarnsButPassesWhenLastFMKeyIsRejected(t *testing.T) {
 	}
 }
 
+// With no Last.fm key configured the validator is never called, and the report
+// warns that artwork is disabled rather than failing: artwork is optional, so
+// its absence is not a broken setup.
 func TestCheckWarnsWhenNoLastFMKeyIsConfigured(t *testing.T) {
 	socket := serveCheckCliamp(t, version.Number)
 	cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
@@ -164,14 +180,16 @@ func TestCheckWarnsWhenNoLastFMKeyIsConfigured(t *testing.T) {
 	}
 }
 
+// A skewed plugin version names the half that is behind — the plugin or the
+// daemon — while still passing, exactly as the running daemon warns rather than
+// fails. The versions are derived from the daemon's own line, so these cases
+// hold at any release rather than encoding today's version.
 func TestCheckNamesTheStaleHalfOnVersionSkew(t *testing.T) {
 	tests := []struct {
 		name           string
 		pluginVersion  string
 		expectedPhrase string
 	}{
-		// The relation is computed from the daemon's own line, so these hold at
-		// any release rather than encoding today's version.
 		{"plugin behind", olderLine(t), "the plugin is the half that is behind"},
 		{"daemon behind", newerLine(t), "the daemon is the half that is behind"},
 	}
@@ -183,7 +201,6 @@ func TestCheckNamesTheStaleHalfOnVersionSkew(t *testing.T) {
 			var out bytes.Buffer
 			code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
 
-			// Version skew warns, exactly as the running daemon does.
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
 			}
@@ -227,6 +244,9 @@ func TestVersionMessagingSpeaksWithOneVoice(t *testing.T) {
 	}
 }
 
+// A plugin on the daemon's own release line — here a pre-release of it — is
+// reported as the same line rather than warned about, so a matching install
+// does not nag.
 func TestCheckStaysQuietOnAMatchingPluginLine(t *testing.T) {
 	pluginLine := version.Number + "-dev.1"
 	socket := serveCheckCliamp(t, pluginLine)
@@ -261,6 +281,11 @@ func configLine(t *testing.T, report string) string {
 // file at all, so `--check` reported `config ok` for a path the daemon cannot
 // use, and the branch whose message says "is not readable" could only ever fire
 // when the path was missing outright.
+//
+// A config the daemon cannot read is still not a hard failure — the built-in
+// defaults are a working configuration — so the exit code stays 0 while the
+// line warns. Running as root defeats the mode bits, so the unreadable case's
+// premise is checked rather than assumed.
 func TestCheckReportsWhetherTheConfigFileIsReadable(t *testing.T) {
 	dir := t.TempDir()
 	readable := filepath.Join(dir, "config.toml")
@@ -277,11 +302,9 @@ func TestCheckReportsWhetherTheConfigFileIsReadable(t *testing.T) {
 	}
 
 	cases := []struct {
-		name string
-		path string
-		want string
-		// Running as root defeats the mode bits, so the premise of the
-		// unreadable case is checked rather than assumed.
+		name            string
+		path            string
+		want            string
 		needsUnreadable bool
 	}{
 		{name: "readable", path: readable, want: "ok"},
@@ -304,9 +327,6 @@ func TestCheckReportsWhetherTheConfigFileIsReadable(t *testing.T) {
 			}
 
 			var out bytes.Buffer
-			// A config the daemon cannot read is still not a hard failure: the
-			// built-in defaults are a working configuration, so the exit code
-			// must stay 0 while the line warns.
 			if code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out); code != 0 {
 				t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
 			}

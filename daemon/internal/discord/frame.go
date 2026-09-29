@@ -1,5 +1,9 @@
 package discord
 
+// This file is the IPC frame layer: it reads and writes the little-endian
+// header and payload Discord's handshake and activity frames are carried in, and
+// bounds a frame so a corrupt length cannot allocate arbitrarily.
+
 import (
 	"bytes"
 	"encoding/binary"

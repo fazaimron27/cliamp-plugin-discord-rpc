@@ -1,5 +1,12 @@
 package daemon
 
+// This file drives the run loop: the version watch that warns once per
+// mismatched plugin pairing, the timeline tracker that keeps a track's
+// started-at anchor stable across snapshots, and the artwork lookup that must
+// not stall a track change or a stop behind it. Its fakes — a mutex-guarded
+// Discord client, a Cliamp IPC session, and artwork resolvers a test can gate
+// or count — live here because those tests share them.
+
 import (
 	"bufio"
 	"bytes"
@@ -151,6 +158,11 @@ func serveCliampEvent(t *testing.T, socket, pluginVersion string, release <-chan
 	}()
 }
 
+// A plugin on an older release line must produce exactly one warning naming
+// both versions, and the daemon must keep publishing: "warn, keep running" is
+// the chosen behavior, so the activity still reaches Discord. The warning is
+// asserted as the sentence version.Explain words, because the run loop and the
+// --check report share one wording rather than each wording it privately.
 func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	release := make(chan struct{})
@@ -169,8 +181,6 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, presenceRefresh)
 	}()
 
-	// The run loop logs the same sentence the --check report prints, so this
-	// asserts the shared wording rather than a private one.
 	expected := "discord-rpc " + version.Explain(version.PluginBehind, "1.4.0", version.Number)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(logs.String(), expected) {
@@ -186,26 +196,27 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	if count := strings.Count(output, expected); count != 1 {
 		t.Fatalf("warning logged %d times, want 1:\n%s", count, output)
 	}
-	// "Warn, keep running" is the chosen behavior: the activity must still publish.
 	if client.published() == 0 {
 		t.Fatal("daemon stopped publishing after the mismatch")
 	}
 }
 
+// The version watch warns once for a mismatched plugin version, names both
+// versions so the user can act on it, stays quiet when the same version is
+// observed again, and warns afresh for a different plugin version because that
+// is a new pairing.
 func TestVersionWatchReportsMismatchOnce(t *testing.T) {
 	var watch versionWatch
 	warning := watch.observe("1.4.0")
 	if warning == "" {
 		t.Fatal("mismatched plugin version produced no warning")
 	}
-	// The message has to name both versions, or the user cannot act on it.
 	if !strings.Contains(warning, "1.4.0") || !strings.Contains(warning, version.Number) {
 		t.Fatalf("warning does not name both versions: %q", warning)
 	}
 	if repeat := watch.observe("1.4.0"); repeat != "" {
 		t.Fatalf("same plugin version warned twice: %q", repeat)
 	}
-	// A different plugin version is a new pairing, so it must be reported.
 	if upgrade := watch.observe("1.5.0"); upgrade == "" {
 		t.Fatal("new plugin version produced no warning")
 	}
@@ -228,11 +239,12 @@ func TestVersionWatchReportsAnEquivalentVersionOnce(t *testing.T) {
 	}
 }
 
+// A plugin on the daemon's own release line, one carrying a pre-release
+// suffix, one that omits the version field, and one that sends junk must all
+// stay quiet. The compatible versions are derived from the daemon's own release
+// rather than hardcoded, so a version bump cannot leave this fixture asserting
+// a pairing whose sides have since moved apart.
 func TestVersionWatchStaysQuietForCompatiblePlugins(t *testing.T) {
-	// Derived from the daemon's own release rather than hardcoded, so a version
-	// bump cannot leave this fixture asserting a stale pairing. A plugin on the
-	// same release line, one carrying a pre-release suffix, one that omits the
-	// field, and one that sends junk must all stay quiet.
 	compatible := []string{version.Number, version.Number + "-dev.1", "", "dev"}
 	for _, pluginVersion := range compatible {
 		var watch versionWatch
@@ -242,6 +254,9 @@ func TestVersionWatchStaysQuietForCompatiblePlugins(t *testing.T) {
 	}
 }
 
+// An older plugin line warns, names both versions, and points the user at the
+// plugin update rather than the daemon: when the plugin is the half that is
+// behind, sending the user at the daemon is the wrong direction.
 func TestVersionWatchReportsPluginBehind(t *testing.T) {
 	older := olderLine(t)
 	var watch versionWatch
@@ -255,13 +270,15 @@ func TestVersionWatchReportsPluginBehind(t *testing.T) {
 	if !strings.Contains(warning, "cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v"+version.Number) {
 		t.Fatalf("warning does not tell the user to update the plugin: %q", warning)
 	}
-	// The whole point of the direction: do not send the user at the daemon when
-	// the plugin is the half that is behind.
 	if strings.Contains(warning, "install.sh") {
 		t.Fatalf("warning points at the daemon, but the plugin is behind: %q", warning)
 	}
 }
 
+// A newer plugin line warns and names the daemon as the half that is behind,
+// pointing at the install script for the newer release line and at the
+// from-source path. It must never tell the user to replace the plugin when the
+// plugin is the newer half, which is the bug this direction fixes.
 func TestVersionWatchReportsDaemonBehind(t *testing.T) {
 	newer := newerLine(t)
 	var watch versionWatch
@@ -281,13 +298,14 @@ func TestVersionWatchReportsDaemonBehind(t *testing.T) {
 	if !strings.Contains(warning, "rebuild from source") {
 		t.Fatalf("warning omits the from-source path: %q", warning)
 	}
-	// The bug this direction fixes: never tell the user to replace the plugin
-	// when the plugin is the newer half.
 	if strings.Contains(warning, "cliamp plugins install") {
 		t.Fatalf("warning points at the plugin, but the daemon is behind: %q", warning)
 	}
 }
 
+// A plugin version carrying the release tag's leading "v" or surrounding space
+// must not malform the install URL in the daemon-behind advice: every spelling
+// of the same line yields the same versioned install.sh path.
 func TestVersionWatchNormalizesTagInDaemonAdvice(t *testing.T) {
 	newer := newerLine(t)
 	for _, pluginVersion := range []string{newer, "v" + newer, " " + newer + " "} {
@@ -299,6 +317,10 @@ func TestVersionWatchNormalizesTagInDaemonAdvice(t *testing.T) {
 	}
 }
 
+// Every spelling of a reported plugin version — bare, v-prefixed, and
+// space-padded — renders the right relation sentence without doubling the v
+// prefix, so the same release is described the same way however the plugin
+// spelled it.
 func TestVersionWatchRendersReportedVersionCleanly(t *testing.T) {
 	newer, older := newerLine(t), olderLine(t)
 	tests := []struct {
@@ -322,6 +344,10 @@ func TestVersionWatchRendersReportedVersionCleanly(t *testing.T) {
 	}
 }
 
+// A track playing straight through keeps its started-at anchor across
+// snapshots, a forward jump past the continuity tolerance re-anchors it as a
+// seek, a pause clears the anchor, and a resume anchors afresh — the rules that
+// keep Discord's progress bar honest.
 func TestTimelineTrackerPreservesProgressAndDetectsSeek(t *testing.T) {
 	tracker := timelineTracker{}
 	first := tracker.Accept(playback.State{Status: "playing", Title: "Track", Path: "track", Duration: 200, Position: 10, ObservedAt: 1000})
@@ -346,6 +372,9 @@ func TestTimelineTrackerPreservesProgressAndDetectsSeek(t *testing.T) {
 	}
 }
 
+// A snapshot carrying no observation time of its own is stamped with the
+// tracker's clock, so a state from a source that omits the timestamp still gets
+// a stable anchor instead of a zero one.
 func TestTimelineTrackerUsesObservationFallback(t *testing.T) {
 	tracker := timelineTracker{nowUnix: func() int64 { return 1000 }}
 	state := tracker.Accept(playback.State{Status: "playing", Title: "Track", Duration: 100, Position: 25})
@@ -362,12 +391,13 @@ type cliampSession struct {
 	done      chan struct{}
 }
 
+// serveCliampSession starts a Cliamp IPC peer on socket and returns the session
+// a test publishes snapshots through. Its snapshot channel is buffered, with
+// room for more than these tests send, because the daemon reads the stream from
+// its own goroutine while a test may be holding the loop up.
 func serveCliampSession(t *testing.T, socket string) *cliampSession {
 	t.Helper()
 	session := &cliampSession{
-		// Buffered, with room for more than these tests send: the daemon reads
-		// the stream from its own goroutine, which is exactly what a test may be
-		// holding up.
 		snapshots: make(chan map[string]any, 16),
 		done:      make(chan struct{}),
 	}
@@ -524,7 +554,9 @@ func (c *countingArtwork) answerWith(image string) {
 
 // Artwork is looked up over the network and the loop is the only thing that
 // talks to Discord, so a lookup it waits on delays every presence update behind
-// it. A track change must not queue behind the artwork of the track it replaced.
+// it. A track change must not queue behind the artwork of the track it replaced:
+// with the lookup for the first track open and never answered, the second track
+// reaching Discord proves it was published without waiting for it.
 func TestRunPublishesATrackChangeWhileALookupIsInFlight(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	session := serveCliampSession(t, socket)
@@ -534,8 +566,6 @@ func TestRunPublishesATrackChangeWhileALookupIsInFlight(t *testing.T) {
 	session.publish(t, playingSnapshot("First"))
 	artwork.awaitLookup(t)
 
-	// The lookup for "First" is open and the fake will never answer it, so
-	// anything published from here on was published without waiting for it.
 	session.publish(t, playingSnapshot("Second"))
 	waitFor(t, "the second track to reach Discord", func() bool {
 		for _, activity := range client.snapshot() {
@@ -564,7 +594,9 @@ func TestRunClearsPresenceWhileALookupIsInFlight(t *testing.T) {
 
 // The loop publishes as soon as it knows the track, then again when the artwork
 // lands. Showing the track immediately is the point of the change: the artwork
-// is an enhancement, and waiting for it is what stalled everything else.
+// is an enhancement, and waiting for it is what stalled everything else. The
+// first activity therefore carries no artwork — nothing has answered the lookup
+// yet — and the second carries the image the resolver releases.
 func TestRunRepublishesPresenceWhenTheArtworkArrives(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	session := serveCliampSession(t, socket)
@@ -574,7 +606,6 @@ func TestRunRepublishesPresenceWhenTheArtworkArrives(t *testing.T) {
 	session.publish(t, playingSnapshot("Track"))
 	waitFor(t, "the track to reach Discord", func() bool { return len(client.snapshot()) > 0 })
 
-	// Nothing has answered the lookup yet, so this activity was built without it.
 	if activity := client.snapshot()[0]; activity.Assets != nil {
 		t.Fatalf("presence carried artwork before the lookup answered: %#v", activity.Assets)
 	}
