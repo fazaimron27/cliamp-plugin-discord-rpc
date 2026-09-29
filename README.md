@@ -17,26 +17,30 @@ Building and internals live under [`docs/`](docs/) —
 
 ## Compatibility
 
-One thing decides the setup, and it is the Cliamp build you have:
+One thing decides the setup, and it is the Cliamp version you have:
 
-- **Cliamp built from official `main`:** install both halves below and change
-  nothing. This is the default `ipc` transport.
-- **An older Cliamp build:** set
+- **Cliamp v2.x:** install both halves below and change nothing. This is the
+  default `ipc` transport.
+- **Cliamp v1.x:** set
   [`transport = "file"`](#choose-the-playback-transport). The plugin writes a
   state document instead of publishing one, so it asks nothing of Cliamp beyond
   `cliamp.fs`, and the daemon reads that document. Nothing else about the setup
   changes.
 
+The plugin API the default transport needs — retained plugin events published
+over IPC — first shipped in Cliamp v2. No v1 release carries it, so on a v1 build
+the `ipc` transport cannot work at all, and no setting makes it. The split really
+is the major version: every v1 build needs `file`, every v2 build takes `ipc`.
+
 Either way, the plugin and the daemon must be on the same release line. What the
-default transport requires of Cliamp, and what an older build answers instead, is
-in [Architecture](docs/architecture.md#pubsub-contract).
+default transport requires of Cliamp, and what a v1 build answers instead, is in
+[Architecture](docs/architecture.md#pubsub-contract).
 
 ## Prerequisites
 
-- Cliamp built from the official
-  [`main`](https://github.com/bjarneo/cliamp/tree/main) branch and on your `PATH`
-  as `cliamp`. An older build can use the `file` transport instead
-  ([build recipe](docs/building.md#build-cliamp-from-main)).
+- Cliamp v2.x, on your `PATH` as `cliamp`. A v1 build can use the `file` transport
+  instead ([build recipe](docs/building.md#build-cliamp-from-main), which builds
+  the official [`main`](https://github.com/bjarneo/cliamp/tree/main) branch).
 - The Discord desktop client, signed in. Discord in a web browser does not expose
   the local IPC socket Rich Presence uses.
 - `curl`, `gh`, `sha256sum`, `tar`, and `systemctl` when installing from a
