@@ -15,7 +15,7 @@ import (
 // Number is the released version of this project. The Lua plugin manifest and
 // the release tag must carry the same value; install.sh is bundled into release
 // archives and pins the same line, so bump all of them together.
-const Number = "1.9.2"
+const Number = "1.9.3"
 
 // Relation describes how a plugin's release line compares to the daemon's.
 type Relation int
