@@ -16,7 +16,7 @@
 set -eu
 
 repository="fazaimron27/cliamp-plugin-discord-rpc"
-version="${CLIAMP_RPC_VERSION:-v1.9.2}"
+version="${CLIAMP_RPC_VERSION:-v1.9.3}"
 bin_dir="${CLIAMP_RPC_BIN_DIR:-${HOME:?HOME is not set}/.local/bin}"
 service_dir="${CLIAMP_RPC_SERVICE_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user}"
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -29,7 +29,7 @@ Usage: install.sh [options]
 Install the Cliamp Discord RPC daemon and systemd user service.
 
 Options:
-  --version VERSION       Release version to install (default: v1.9.2)
+  --version VERSION       Release version to install (default: v1.9.3)
   --bin-dir DIRECTORY     Daemon installation directory (default: ~/.local/bin)
   --service-dir DIRECTORY systemd user unit directory
   -h, --help              Show this help
