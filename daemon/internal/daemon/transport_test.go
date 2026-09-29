@@ -1,5 +1,9 @@
 package daemon
 
+// This file exercises the run loop's file transport: presence built from the
+// state document, presence cleared when a clean quit removes it, and a
+// heartbeat-only rewrite that must not be mistaken for a new activity.
+
 import (
 	"context"
 	"encoding/json"
@@ -100,6 +104,8 @@ func fileConfig(path string) config.Config {
 	}
 }
 
+// Presence comes entirely from the state document here: no socket, no
+// subscription, so the activity has to carry what the file says.
 func TestRunPublishesWhatTheStateFileSays(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	writeStateDocument(t, path, map[string]any{"title": "From the file", "artist": "The artist"})
@@ -109,8 +115,6 @@ func TestRunPublishesWhatTheStateFileSays(t *testing.T) {
 	t.Cleanup(cancel)
 	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now, presenceRefresh) }()
 
-	// The document is the whole transport: no socket, no subscription, and the
-	// presence has to come from what the file says.
 	activity := client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "From the file"
 	})
@@ -119,6 +123,9 @@ func TestRunPublishesWhatTheStateFileSays(t *testing.T) {
 	}
 }
 
+// A clean quit removes the document, and the presence must follow it off
+// Discord. The IPC transport gets that from its connection closing; this one
+// has to derive it from the file going.
 func TestRunClearsPresenceWhenTheDocumentIsRemoved(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	writeStateDocument(t, path, map[string]any{"title": "From the file"})
@@ -132,9 +139,6 @@ func TestRunClearsPresenceWhenTheDocumentIsRemoved(t *testing.T) {
 		return activity.Details == "From the file"
 	})
 
-	// A clean quit removes the document. The presence must follow it off
-	// Discord, which is what the IPC transport gets from its connection closing
-	// and what this transport has to derive from the file going.
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -152,10 +156,11 @@ func TestRunClearsPresenceWhenTheDocumentIsRemoved(t *testing.T) {
 // re-anchoring it on each beat. Re-anchoring would show up as a new activity,
 // because the started-at time is part of what Discord is told.
 //
-// The beats are 15 seconds apart, as the plugin's are, so the rewrite moves the
+// The beats are 15 seconds apart, as the plugin's are, so a rewrite moves the
 // heartbeat further than the tracker's continuity tolerance allows. A rewrite
 // inside the same second would prove nothing: the format's heartbeat has
-// whole-second resolution, so two writes that close together move nothing.
+// whole-second resolution, so two writes that close together move nothing. The
+// test therefore rewrites the same document, with nothing else about it changed.
 func TestRunIgnoresAHeartbeatOnlyRewrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	updatedAt := time.Now().Add(-30 * time.Second).Unix()
@@ -176,8 +181,6 @@ func TestRunIgnoresAHeartbeatOnlyRewrite(t *testing.T) {
 		return activity.Details == "Long track"
 	})
 
-	// The same document again, fifteen seconds of heartbeats later and with
-	// nothing else about it changed.
 	writeStateDocument(t, path, document(time.Now().Unix()))
 	time.Sleep(300 * time.Millisecond)
 

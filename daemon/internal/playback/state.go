@@ -1,6 +1,12 @@
 // Package playback validates playback snapshots published by the Cliamp plugin.
 package playback
 
+// This file holds the playback snapshot both halves of the project agree on.
+// State's fields and JSON tags are the wire contract the Lua plugin publishes to
+// and the daemon accepts; Validate rejects payloads outside it, and IsPlaying,
+// TrackKey, and PresenceKey derive the three values the rest of the daemon asks
+// a snapshot for.
+
 import (
 	"errors"
 	"strconv"

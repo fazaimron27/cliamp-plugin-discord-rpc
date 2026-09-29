@@ -1,5 +1,10 @@
 package discord_test
 
+// This file exercises the Discord IPC client against a socket a test stands up
+// in place of Discord: it answers the handshake and the activity frames the
+// client sends, so both the successful path and the connect-failure path can be
+// tested without a running Discord.
+
 import (
 	"context"
 	"encoding/binary"
@@ -15,6 +20,10 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 )
 
+// A stand-in Discord accepts the connection, checks the handshake and one
+// SET_ACTIVITY request, and answers the activity by nonce. The client reaching
+// the end without an error proves the handshake and an activity publish both
+// complete against a well-behaved peer.
 func TestDiscordClientHandshakeAndActivity(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", dir)
@@ -84,11 +93,15 @@ func TestDiscordClientHandshakeAndActivity(t *testing.T) {
 // connection attempt fails at the socket Discord actually published. Connect
 // walks a list of candidates and used to report whichever it tried last, which
 // is a path that never existed, hiding the socket that refused us.
+//
+// The other search roots are emptied so the only candidate that exists is the
+// one this test listens on.
+//
+// Accepting and then going silent stands in for Discord once it has seen enough
+// handshakes, without depending on how long Discord waits.
 func TestDiscordConnectNamesTheSocketThatRefusedIt(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", dir)
-	// Empty the other search roots so the only candidate that exists is the one
-	// this test listens on.
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("TMP", t.TempDir())
 	t.Setenv("TEMP", t.TempDir())
@@ -105,8 +118,6 @@ func TestDiscordConnectNamesTheSocketThatRefusedIt(t *testing.T) {
 		if err != nil {
 			return
 		}
-		// Accepting and then going silent stands in for Discord once it has seen
-		// enough handshakes, without depending on how long Discord waits.
 		<-time.After(50 * time.Millisecond)
 		_ = conn.Close()
 	}()

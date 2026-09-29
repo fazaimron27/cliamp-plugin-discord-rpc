@@ -1,5 +1,13 @@
 package version_test
 
+// This file is the release-pin guard: it reads every file a release pin is
+// written into and fails when one disagrees with version.Number. The set of
+// files matters as much as the check, because a pin moved into a file the scan
+// does not read is a pin no check can see — nothing else reads docs/, so the
+// split that created docs/building.md moved a `git clone --branch vX.Y.Z` into
+// it, and leaving the scan on README.md alone would have retired that pin from
+// the guard silently.
+
 import (
 	"os"
 	"path/filepath"
@@ -27,6 +35,41 @@ func repoFile(t *testing.T, name string) string {
 // ships an archive whose bundled installer downloads the previous daemon: a
 // failure that stays silent until someone inspects the wrong binary. The same
 // check runs in CI through the repository's existing `go test` step.
+//
+// The installer carries two pins — the default version and the --version help
+// text — and both ship inside the archive, so both have to be current.
+//
+// The documentation pins are derived from the current release rather than
+// hardcoded, so a pin left behind by a partial bump is rejected instead of
+// tolerated. The allowed set holds the current release and nothing else: it used
+// to carry v1.4.0 and v1.5.0 as sanctioned legacy references, which meant a
+// document that still recommended a retired line satisfied the guard that was
+// supposed to notice a stale pin. A retired line is not a permitted pin, so
+// recommending one again fails here.
+//
+// Those documents write the release both ways — v-prefixed in install commands
+// and bare in sample output and prose — and scanning only the prefixed form
+// leaves the bare ones to rot through a bump. Every version-shaped string is
+// therefore scanned, with two shapes exempted: a match inside a v-prefixed
+// version, which the prefixed pass already covered, and a Go version, which
+// names the toolchain a contributor needs rather than this project's release.
+//
+// The README also quotes the diagnostic's report, and a quote that no longer
+// matches what the command prints is documentation gone stale in silence — the
+// same class of drift as a missed version pin, and one the scans above cannot
+// catch, since they read versions rather than wording. The quoted sentence is
+// computed from version.Explain rather than restated, so rewording the report
+// fails here until the README line is updated to match.
+//
+// The release workflow is the last pin. release.yml is the only place that
+// checks the tag against version.Number, and it reads the constant at run time
+// rather than restating it, so any version written into a file is a pin
+// nothing guards. That is what the comment beside the tag check used to be: it
+// named a version pair that went stale on the next release, in a file the guard
+// did not see. Action pins are exempt — the v-prefixed string in
+// `uses: actions/checkout@<sha> # v5.0.0` names another project's release, so
+// bumping an action has nothing to do with version.Number — and no other
+// version-shaped string belongs in the file.
 func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 	number := version.Number
 
@@ -43,7 +86,6 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 
 	t.Run("installer default and help", func(t *testing.T) {
 		source := repoFile(t, "install.sh")
-		// Both of these ship inside the archive, so both have to be current.
 		patterns := []string{
 			`(?m)^version="\$\{CLIAMP_RPC_VERSION:-v([^}"]+)\}"`,
 			`(?m)^\s*--version VERSION[^\n]*\(default: v([0-9.]+)\)`,
@@ -60,21 +102,8 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 	})
 
 	t.Run("documentation", func(t *testing.T) {
-		// Every file a release pin is written into is scanned, the build doc
-		// included. Nothing else reads docs/, so a pin moved there is a pin no
-		// check can see: the split that created docs/building.md moved a
-		// `git clone --branch vX.Y.Z` into it, and leaving the scan on README.md
-		// alone would have retired that pin from the guard silently.
-		//
-		// Derived from the current release rather than hardcoded, so a pin left
-		// behind by a partial bump is rejected instead of tolerated. The allowed
-		// set holds the current release and nothing else: it used to carry
-		// v1.4.0 and v1.5.0 as sanctioned legacy references, which meant a
-		// document that still recommended a retired line satisfied the guard
-		// that was supposed to notice a stale pin. A retired line is not a
-		// permitted pin, so recommending one again fails here.
 		allowed := map[string]bool{
-			"v" + number: true, // the current release
+			"v" + number: true,
 		}
 		for _, name := range []string{"README.md", "docs/building.md"} {
 			source := repoFile(t, name)
@@ -87,14 +116,6 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 				}
 			}
 
-			// The documentation writes the release both ways: v-prefixed in install
-			// commands and bare in sample output and prose. Scanning only the
-			// prefixed form leaves those bare ones to rot through a bump, so every
-			// version-shaped string is scanned and two shapes are exempted instead.
-			//
-			// A match inside a v-prefixed version is already covered by the loop
-			// above, and a Go version names the toolchain a contributor needs rather
-			// than this project's release.
 			bare := regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 			for _, loc := range bare.FindAllStringIndex(source, -1) {
 				found := source[loc[0]:loc[1]]
@@ -110,12 +131,6 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 		}
 	})
 
-	// The README quotes the diagnostic's report, and a quote that no longer
-	// matches what the command prints is documentation that went stale in
-	// silence — the same class of drift as a missed version pin, and undetected
-	// by the scans above, which read versions rather than wording. The sentence
-	// is derived from the function the report words itself with, so rewording
-	// the report fails here until the quoted line is updated to match.
 	t.Run("quoted report", func(t *testing.T) {
 		quoted := version.Explain(version.Same, number, number)
 		if !strings.Contains(repoFile(t, "README.md"), quoted) {
@@ -125,17 +140,6 @@ func TestReleasePinsAgreeWithVersionConstant(t *testing.T) {
 
 	t.Run("release workflow", func(t *testing.T) {
 		source := repoFile(t, ".github/workflows/release.yml")
-		// release.yml is the only place that checks the tag against
-		// version.Number, and it reads the constant at run time rather than
-		// restating it. So any version written into this file is a pin with
-		// nothing guarding it, which is what the comment beside the tag check
-		// used to be: it named a version pair that went stale on the next
-		// release, and the guard could not see the file it lived in.
-		//
-		// Action pins are exempt. The v-prefixed string in
-		// `uses: actions/checkout@<sha> # v5.0.0` names another project's
-		// release, so bumping an action has nothing to do with version.Number.
-		// No other version-shaped string belongs in this file.
 		versioned := regexp.MustCompile(`v?[0-9]+\.[0-9]+\.[0-9]+`)
 		for index, rawLine := range strings.Split(source, "\n") {
 			if strings.Contains(rawLine, "uses:") {

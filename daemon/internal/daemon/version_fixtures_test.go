@@ -1,5 +1,15 @@
 package daemon
 
+// This file holds the shared release-line fixtures: newerLine and olderLine,
+// which derive a plugin version one step either side of the daemon's own, and
+// shiftLine, the arithmetic under them, pinned at the major boundary where that
+// arithmetic is easiest to get wrong.
+//
+// The fixtures live here rather than beside one of their users, because two
+// test files need a plugin version at a known distance from the daemon's own:
+// the run loop's version watch in daemon_test.go and the --check diagnostic in
+// check_test.go.
+
 import (
 	"fmt"
 	"strconv"
@@ -8,11 +18,6 @@ import (
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
-
-// The release-line fixtures live here rather than beside one of their users,
-// because two test files need a plugin version at a known distance from the
-// daemon's own: the run loop's version watch in daemon_test.go and the --check
-// diagnostic in check_test.go.
 
 // newerLine and olderLine derive a release line one step from the daemon's own
 // instead of hardcoding one, so a version bump cannot leave a fixture asserting

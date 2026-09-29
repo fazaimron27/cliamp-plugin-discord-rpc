@@ -1,6 +1,18 @@
 // Package config loads and validates cliamp-rpcd configuration.
 package config
 
+// This file is the configuration surface: it names the settings the daemon runs
+// on, reads them from flags, environment variables, and Cliamp's config.toml,
+// and records which of those a transport value came from.
+//
+// Two settings are joint with the plugin, because the Lua plugin reads the same
+// config.toml keys and has no command line or environment of its own. The
+// transport may still be overridden from this side, which is why its source is
+// recorded and why such an override is reported through TransportWarning rather
+// than obeyed quietly. The state path deliberately has no flag or environment
+// variable: an override here could only be made where the plugin cannot see it,
+// leaving the daemon watching a path nothing writes.
+
 import (
 	"errors"
 	"flag"
@@ -13,6 +25,9 @@ import (
 	"time"
 )
 
+// DefaultApplicationID is the community-maintained Cliamp Discord application,
+// used for presence unless a custom ID is supplied through --app-id,
+// CLIAMP_DISCORD_APP_ID, or the plugin section of Cliamp's config file.
 const DefaultApplicationID = "1537329890829926400"
 
 // The two playback event transports. IPC is the retained pub/sub stream that
@@ -109,6 +124,15 @@ func (c Config) TransportWarning() string {
 
 // Load parses command-line arguments, then fills credentials from environment
 // variables and the dedicated [plugins.discord-rpc] Cliamp config section.
+//
+// The transport flag defaults to empty so that an unset one falls through to
+// config.toml, which is the one source the Lua plugin can also read. A transport
+// naming neither of the two known values is rejected rather than fallen back
+// from, because a misspelled value would otherwise start the daemon on the wrong
+// source and look exactly like a Cliamp that sends nothing. A non-positive
+// maximum age is rejected for the same kind of reason: a zero window would clear
+// every document the moment it arrived, so the file transport could never show
+// anything.
 func Load(args []string) (Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -128,8 +152,6 @@ func Load(args []string) (Config, error) {
 	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file `path` containing Discord RPC credentials")
 	flags.StringVar(&cfg.LargeImage, "large-image", envOr("CLIAMP_DISCORD_LARGE_IMAGE", "cliamp"), "Discord application asset `key`")
 	flags.StringVar(&cfg.LargeText, "large-text", envOr("CLIAMP_DISCORD_LARGE_TEXT", "Cliamp"), "large image hover `text`")
-	// The transport flag defaults to empty so an unset one can fall through to
-	// config.toml, the one place the Lua plugin can read from too.
 	flags.StringVar(&cfg.Transport, "transport", envOr("CLIAMP_DISCORD_TRANSPORT", ""), "playback event `transport`: ipc or file (or CLIAMP_DISCORD_TRANSPORT)")
 	flags.DurationVar(&cfg.StateMaxAge, "max-age", DefaultStateMaxAge, "clear presence after the file transport's heartbeat exceeds `duration`")
 	if err := flags.Parse(args); err != nil {
@@ -155,8 +177,6 @@ func Load(args []string) (Config, error) {
 	if cfg.ApplicationID == "" {
 		cfg.ApplicationID = DefaultApplicationID
 	}
-	// The transport is a joint setting: the plugin reads the same key, so where
-	// this value came from decides whether the halves can disagree.
 	cfg.TransportFromFile, err = readTOMLValue(cfg.CliampConfig, "plugins.discord-rpc", "transport")
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Config{}, fmt.Errorf("read playback transport: %w", err)
@@ -173,17 +193,12 @@ func Load(args []string) (Config, error) {
 		cfg.Transport = TransportIPC
 		cfg.TransportSource = SourceDefault
 	}
-	// Reject rather than fall back: a misspelled transport would otherwise start
-	// the daemon on the wrong source and look like a Cliamp that sends nothing.
 	if cfg.Transport != TransportIPC && cfg.Transport != TransportFile {
 		return Config{}, fmt.Errorf(
 			"playback transport %q from the %s is not one of %q or %q",
 			cfg.Transport, cfg.TransportSource, TransportIPC, TransportFile,
 		)
 	}
-	// The state path has no flag or environment variable on purpose: it is a
-	// joint setting too, and an override this side could only be made where the
-	// plugin cannot see it, leaving the daemon watching a path nothing writes.
 	cfg.StatePath, err = readTOMLValue(cfg.CliampConfig, "plugins.discord-rpc", "state_path")
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Config{}, fmt.Errorf("read state file path: %w", err)
@@ -191,8 +206,6 @@ func Load(args []string) (Config, error) {
 	if cfg.StatePath == "" {
 		cfg.StatePath = filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json")
 	}
-	// A zero window would clear every document the moment it arrived, so the
-	// file transport could never show anything.
 	if cfg.StateMaxAge <= 0 {
 		return Config{}, errors.New("max age must be positive")
 	}
@@ -202,6 +215,9 @@ func Load(args []string) (Config, error) {
 	return cfg, nil
 }
 
+// writeUsage prints the flag list, with each flag's default beside it. A boolean
+// flag's zero value is left out rather than printed as a default, because false
+// is what the flag already means when it is not given.
 func writeUsage(flags *flag.FlagSet) {
 	fmt.Fprintf(flags.Output(), "Usage: %s [options]\n", flags.Name())
 	writer := tabwriter.NewWriter(flags.Output(), 0, 4, 2, ' ', 0)
@@ -210,7 +226,6 @@ func writeUsage(flags *flag.FlagSet) {
 		if valueName != "" {
 			valueName = " " + valueName
 		}
-		// A boolean flag's zero value is not worth printing as a default.
 		boolean, isBoolean := option.Value.(interface{ IsBoolFlag() bool })
 		defaultValue := ""
 		if option.Name != "app-id" && option.DefValue != "" && !(isBoolean && boolean.IsBoolFlag()) {
@@ -228,6 +243,10 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
+// readTOMLValue reads one key from one section of a TOML file, returning "" when
+// the file or the key is absent. A quoted value is unwrapped: a basic string is
+// unescaped with strconv.Unquote, and a literal string is taken verbatim, since
+// Go reads '1234' as a rune literal, which is not what TOML means by it.
 func readTOMLValue(path, wantedSection, wantedKey string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -249,9 +268,6 @@ func readTOMLValue(path, wantedSection, wantedKey string) (string, error) {
 		}
 		value = trimTOMLComment(strings.TrimSpace(value))
 		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
-			// A literal string takes its content verbatim, so it is unwrapped
-			// rather than unescaped. Handing it to strconv.Unquote would fail:
-			// Go reads '1234' as a rune literal, which TOML does not mean.
 			if value[0] == '\'' {
 				return value[1 : len(value)-1], nil
 			}
@@ -274,6 +290,12 @@ func readTOMLValue(path, wantedSection, wantedKey string) (string, error) {
 // requiring a quote as the final character meant `app_id = "1" # note` fell
 // through as an unquoted value, kept its quotes, and failed the Discord
 // handshake with a configuration error that named neither the file nor the line.
+//
+// A backslash escapes the next character inside a basic string, so the scan
+// steps over a pair of them. A literal string has no escapes, so a backslash
+// there closes nothing and must not be allowed to skip the closing quote. An
+// unterminated value is returned as written, so the ordinary unquoted path
+// handles it rather than this function inventing a reason of its own.
 func trimTOMLComment(value string) string {
 	if value == "" || (value[0] != '"' && value[0] != '\'') {
 		if index := strings.IndexByte(value, '#'); index >= 0 {
@@ -284,9 +306,6 @@ func trimTOMLComment(value string) string {
 
 	quote := value[0]
 	for index := 1; index < len(value); index++ {
-		// A backslash escapes the next character inside a basic string. A
-		// literal string has no escapes, so a backslash closes nothing there
-		// and must not be allowed to skip over the closing quote.
 		if quote == '"' && value[index] == '\\' {
 			index++
 			continue
@@ -295,7 +314,5 @@ func trimTOMLComment(value string) string {
 			return value[:index+1]
 		}
 	}
-	// Unterminated. Returned as written so the ordinary unquoted path handles
-	// it rather than this function inventing a reason of its own.
 	return value
 }

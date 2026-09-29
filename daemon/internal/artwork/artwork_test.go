@@ -1,5 +1,9 @@
 package artwork_test
 
+// This file tests the Last.fm artwork resolver through its public API: which
+// image in a response is chosen and how long it is reused, what a failure
+// retries, and the guarantee that no returned error carries the API key.
+
 import (
 	"context"
 	"errors"
@@ -13,6 +17,9 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
 )
 
+// A response offering an http image and an https image resolves to the https
+// one, and a second lookup for the same track is served from the cache rather
+// than the server.
 func TestLastFMArtworkResolutionAndCache(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,6 +42,8 @@ func TestLastFMArtworkResolutionAndCache(t *testing.T) {
 	}
 }
 
+// A resolver built with no API key returns no artwork and no error, so the
+// daemon can run without Last.fm configured.
 func TestLastFMArtworkDisabledWithoutKey(t *testing.T) {
 	image, err := artwork.NewLastFM("").Resolve(context.Background(), "Artist", "Track")
 	if err != nil || image != "" {
@@ -48,6 +57,8 @@ func (failingTransport) RoundTrip(request *http.Request) (*http.Response, error)
 	return nil, errors.New(request.URL.String())
 }
 
+// The transport fails with the request URL as its error, and the error Resolve
+// returns must not carry the URL, the query, or the API key it held.
 func TestLastFMTransportErrorDoesNotExposeRequestURL(t *testing.T) {
 	const secret = "secret-api-key"
 	client := &http.Client{Transport: failingTransport{}}
@@ -73,6 +84,9 @@ func (transport *countingFailureTransport) RoundTrip(*http.Request) (*http.Respo
 	return nil, errors.New("offline")
 }
 
+// A failed lookup is remembered for a retry window: the next Resolve for the
+// same track makes no request and returns no artwork, and only after the clock
+// passes the window does it ask again.
 func TestLastFMFailuresHaveRetryBackoff(t *testing.T) {
 	now := time.Unix(1000, 0)
 	transport := &countingFailureTransport{}
@@ -100,6 +114,8 @@ func TestLastFMFailuresHaveRetryBackoff(t *testing.T) {
 	}
 }
 
+// Validate against a server that answers a lookup reports success and sends
+// track.getInfo with the configured key, which is what a working key looks like.
 func TestLastFMValidateAcceptsAWorkingKey(t *testing.T) {
 	var query url.Values
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,9 +133,11 @@ func TestLastFMValidateAcceptsAWorkingKey(t *testing.T) {
 	}
 }
 
+// Last.fm answers a bad key with HTTP 200 and an error object rather than an
+// HTTP failure, so the status line alone cannot distinguish it from a
+// successful lookup. Validate has to read the body, and this proves the
+// rejection is reported with Last.fm's code.
 func TestLastFMValidateRejectsARejectedKey(t *testing.T) {
-	// Last.fm answers a bad key with HTTP 200 and an error object, so the
-	// status line alone cannot distinguish it from a successful lookup.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"error":10,"message":"Invalid API key - You must be granted a valid key by last.fm"}`))
 	}))
@@ -135,6 +153,10 @@ func TestLastFMValidateRejectsARejectedKey(t *testing.T) {
 	}
 }
 
+// A diagnostic has to answer from the API every time: serving a cached result,
+// or going quiet inside a backoff window left by an earlier probe, would report
+// the state of the cache rather than the state of the key. Two probes against a
+// rejected key must therefore make two requests.
 func TestLastFMValidateIgnoresTheArtworkCacheAndBackoff(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,9 +166,6 @@ func TestLastFMValidateIgnoresTheArtworkCacheAndBackoff(t *testing.T) {
 	defer server.Close()
 
 	resolver := artwork.NewLastFM("bad-key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
-	// A diagnostic has to answer from the API every time. Serving a cached
-	// result, or going quiet inside a backoff window left by an earlier probe,
-	// would report the state of the cache rather than the state of the key.
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := resolver.Validate(context.Background()); err == nil {
 			t.Fatal("Validate() accepted a rejected key")
@@ -157,6 +176,8 @@ func TestLastFMValidateIgnoresTheArtworkCacheAndBackoff(t *testing.T) {
 	}
 }
 
+// A transport error must not put the API key in the error Validate returns,
+// since the daemon logs it.
 func TestLastFMValidateDoesNotExposeTheKeyOnTransportError(t *testing.T) {
 	const secret = "secret-api-key"
 	resolver := artwork.NewLastFM(secret, artwork.WithHTTPClient(&http.Client{Transport: failingTransport{}}))
@@ -190,11 +211,13 @@ func TestLastFMResolveDoesNotExposeTheKeyOnAnUnbuildableRequest(t *testing.T) {
 	}
 }
 
+// An empty response is not knowledge that a track has no artwork; it is a
+// moment when Last.fm had none to give, so it is retried like a failure rather
+// than held for the daemon's lifetime. Holding it that long made one transient
+// miss permanent while a hard failure was retried after 30 seconds, the error
+// path being the more forgiving of the two. Inside the retry window the empty
+// answer stands, so a miss costs one request rather than one per track change.
 func TestLastFMEmptyResultIsRetriedLikeAFailure(t *testing.T) {
-	// An empty response is not knowledge that a track has no artwork; it is a
-	// moment when Last.fm had none to give. Holding it for the daemon's lifetime
-	// made one transient miss permanent, while a hard failure was retried after
-	// 30 seconds — the error path was the more forgiving of the two.
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -216,8 +239,6 @@ func TestLastFMEmptyResultIsRetriedLikeAFailure(t *testing.T) {
 	if image, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || image != "" {
 		t.Fatalf("first Resolve() = %q, %v", image, err)
 	}
-	// Inside the retry window the empty answer stands, so a miss costs one
-	// request rather than one per track change.
 	if image, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || image != "" {
 		t.Fatalf("Resolve() inside the window = %q, %v", image, err)
 	}
@@ -232,10 +253,11 @@ func TestLastFMEmptyResultIsRetriedLikeAFailure(t *testing.T) {
 	}
 }
 
+// The two answers are not equally durable, and should not be: a URL is
+// knowledge about the track, while an empty answer describes a moment. One
+// expiry for both would re-fetch every track on every retry window, so a
+// resolved URL must survive past the retry window without another request.
 func TestLastFMResolvedArtworkOutlivesTheRetryWindow(t *testing.T) {
-	// The two answers are not equally durable, and should not be: a URL is
-	// knowledge about the track, while an empty answer describes a moment. One
-	// expiry for both would re-fetch every track on every retry window.
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++

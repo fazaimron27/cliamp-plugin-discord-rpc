@@ -1,11 +1,21 @@
 package version_test
 
+// This file tests the release-line comparison: which pairings of plugin and
+// daemon versions relate as same, plugin-behind, daemon-behind, or unknown, and
+// the exact sentence each relation is worded as.
+
 import (
 	"testing"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
+// TestVersionRelateComparesReleaseLines walks the release-line shapes a plugin
+// can report — identical, skewed by a patch or a second component, older or
+// newer on either a minor or a major, absent, unparseable, v-prefixed, and
+// space-padded — and asserts which relation each pairing proves. The two-digit
+// minor cases are the ones that hold the comparison numeric: comparing the
+// rendered strings would call 1.10 older than 1.7 and invert the answer.
 func TestVersionRelateComparesReleaseLines(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -20,7 +30,6 @@ func TestVersionRelateComparesReleaseLines(t *testing.T) {
 		{"plugin on an older major", "1.6.0", "2.0.0", version.PluginBehind},
 		{"daemon on an older minor", "1.7.0", "1.6.0", version.DaemonBehind},
 		{"daemon on an older major", "2.0.0", "1.6.0", version.DaemonBehind},
-		// String comparison would call 1.10 older than 1.7 and invert this.
 		{"two digit minor compares numerically", "1.10.0", "1.7.0", version.DaemonBehind},
 		{"two digit minor against itself", "1.10.0", "1.10.3", version.Same},
 		{"absence is not a comparison", "", "1.7.0", version.Unknown},

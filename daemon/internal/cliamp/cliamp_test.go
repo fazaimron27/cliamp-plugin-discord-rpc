@@ -1,5 +1,10 @@
 package cliamp_test
 
+// This file tests Subscribe against a fake Cliamp socket: the version 2
+// handshake it must complete, the structured error it must surface, and the
+// snapshots it streams once subscribed. The fake stands in for Cliamp's IPC
+// server, so each case drives one exchange without a running Cliamp.
+
 import (
 	"bufio"
 	"bytes"
@@ -50,6 +55,9 @@ func serveConn(t *testing.T, socket string, handle func(net.Conn, cliampRequest)
 	}()
 }
 
+// A subscriber that completes the handshake receives the snapshot Cliamp
+// publishes on the playback topic, with the event timestamp recorded as its
+// observed time.
 func TestCliampSubscriptionReceivesPlayback(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	serveConn(t, socket, func(conn net.Conn, request cliampRequest) {
@@ -99,13 +107,14 @@ func TestCliampSubscriptionReportsProtocolError(t *testing.T) {
 // when it has no player state, and a snapshot built from that answer carries no
 // usable status; discarding it is right, discarding it invisibly is not, because
 // the gap it leaves in Discord presence then has no explanation anywhere.
+//
+// The fake sends the unusable snapshot before a good one. The reader consumes
+// frames in order, so receiving the good one proves the bad one was handled, and
+// the log line for it must already have been written by then.
 func TestCliampSubscriptionReportsDiscardedSnapshot(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	serveConn(t, socket, func(conn net.Conn, _ cliampRequest) {
 		_, _ = conn.Write([]byte("{\"version\":2,\"id\":\"discord-rpc-subscribe\",\"ok\":true}\n"))
-		// A snapshot with no status, then a good one. The reader consumes frames
-		// in order, so receiving the good one proves the bad one was handled --
-		// and its log line must already have been written by then.
 		_, _ = conn.Write([]byte("{\"event\":\"plugin.discord-rpc.playback\",\"time\":1000,\"data\":{\"title\":\"Track\"}}\n"))
 		_, _ = conn.Write([]byte("{\"event\":\"plugin.discord-rpc.playback\",\"time\":1001,\"data\":{\"status\":\"playing\",\"title\":\"Track\"}}\n"))
 	})

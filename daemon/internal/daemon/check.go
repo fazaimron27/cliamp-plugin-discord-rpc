@@ -1,5 +1,15 @@
 package daemon
 
+// This file is the diagnostic behind cliamp-rpcd --check: it probes the
+// environment the daemon runs in and prints one line per probe, so that "nothing
+// shows up on Discord" has an answer rather than a guess.
+//
+// The probes differ in what a bad answer costs. A transport the daemon needs
+// cannot be worked around, and fails; everything optional — artwork, and even an
+// unreadable config file, since the built-in defaults are a working
+// configuration — warns and leaves the exit code alone. A working setup is
+// therefore never reported as broken, and a broken one cannot exit 0.
+
 import (
 	"context"
 	"errors"
@@ -39,15 +49,17 @@ type validator interface {
 // exit code: 0 when the daemon could run, 1 when a transport it needs is
 // unavailable. Optional features warn rather than fail, so a working setup is
 // never reported as broken.
+//
+// The Discord client is silenced for the duration: it logs its connection line
+// with a timestamp that would land in the middle of a deliberately timestamp-free
+// report, and nothing is lost, since every outcome it would announce already
+// appears in the report as a line of its own. Check runs once from main,
+// immediately before the process exits, so the global it redirects has no other
+// reader.
 func Check(ctx context.Context, cfg config.Config) int {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
-	// The report is the output, and the Discord client logs its own connection
-	// line with a timestamp that would land in the middle of a deliberately
-	// timestamp-free report. Nothing is lost: every outcome it would announce
-	// already appears here as an ok/fail line. Check runs once from main,
-	// immediately before the process exits, so this global has no other reader.
 	previous := log.Writer()
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(previous)
@@ -55,6 +67,33 @@ func Check(ctx context.Context, cfg config.Config) int {
 	return check(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.NewLastFM(cfg.LastFMAPIKey), os.Stdout)
 }
 
+// check is the report itself. Its probes run in a deliberate order: the transport
+// comes first because it decides which of the two Cliamp probes below can say
+// anything, and because a mismatch in it looks exactly like a broken Cliamp from
+// the outside — the daemon reading one source while the plugin writes the other.
+//
+// The Cliamp probe differs by transport. Over IPC, subscribing is the honest
+// probe, because it is the call that exercises the version 2 envelope, and a
+// Cliamp predating the cutover is reported here rather than appearing as a silent
+// absence of events. The file transport's equivalent is reading the document: it
+// is what the run loop does, and it is the only way to tell a Cliamp that has
+// stopped from one that never started. The plugin's release is reported from
+// whichever of the two the transport can read.
+//
+// Discord is probed with a real handshake, because "the socket exists" and
+// "Discord accepts us" are different answers and only the second one matters.
+// Artwork is probed in the knowledge that a missing or rejected key leaves the
+// daemon fully functional, so neither outcome is a hard failure.
+//
+// The config probe asks whether the daemon can use the file, which is not what
+// os.Stat answers: a directory stat succeeds while being no config file at all,
+// so the probe reported ok for a path that contributes nothing. Reading it is
+// what Load does, so reading it is what this reports on. An unusable config is
+// still not a hard failure, since the built-in defaults are a working
+// configuration, so it warns and the exit code stays 0.
+//
+// The report goes to stdout without timestamps, matching --version: it is a
+// result to read or pipe, not a log.
 func check(ctx context.Context, cfg config.Config, client discordClient, resolver validator, out io.Writer) int {
 	code := 0
 	line := func(status, probe, detail string) {
@@ -65,14 +104,8 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		code = 1
 	}
 
-	// The report goes to stdout without timestamps, matching --version: it is a
-	// result to read or pipe, not a log.
 	fmt.Fprintf(out, "cliamp-rpcd %s\n\n", version.Number)
 
-	// The transport comes first because it decides which of the two Cliamp
-	// probes below can say anything, and because a mismatch in it looks exactly
-	// like a broken Cliamp from the outside: the daemon reads one source while
-	// the plugin writes the other.
 	transport := cfg.Transport
 	if transport == "" {
 		transport = config.TransportIPC
@@ -87,8 +120,6 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		line("ok", "transport", fmt.Sprintf("%s, from the %s", transport, source))
 	}
 
-	// The plugin's release is reported from whichever source the transport can
-	// read: a retained snapshot over IPC, the state document here.
 	reportPlugin := func(detail statewatch.Detail) {
 		if detail.State.PluginVersion == "" {
 			line("warn", "plugin", "the state document carries no plugin version, so the plugin predates the version report")
@@ -98,12 +129,6 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		line(status, "plugin", report)
 	}
 
-	// Cliamp: subscribing is the honest probe of the IPC transport, because it
-	// is the call that exercises the version 2 envelope. A Cliamp predating the
-	// cutover is reported here rather than appearing as a silent absence of
-	// events. The file transport's equivalent is reading the document: it is
-	// what the run loop does, and it is the only way to tell a Cliamp that has
-	// stopped from one that never started.
 	if transport == config.TransportFile {
 		detail := statewatch.Inspect(cfg.StatePath, cfg.StateMaxAge)
 		switch {
@@ -132,8 +157,6 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		}
 	}
 
-	// Discord: a real handshake, because "the socket exists" and "Discord
-	// accepts us" are different answers and only the second one matters.
 	if err := client.Connect(ctx); err != nil {
 		fail("discord", err.Error())
 	} else {
@@ -141,8 +164,6 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		_ = client.Close()
 	}
 
-	// Artwork is an optional enhancement. A missing or rejected key leaves the
-	// daemon fully functional, so neither is a hard failure.
 	if cfg.LastFMAPIKey == "" {
 		line("warn", "last.fm", "no API key configured, artwork disabled")
 	} else if err := resolver.Validate(ctx); err != nil {
@@ -151,16 +172,7 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		line("ok", "last.fm", "the API key was accepted")
 	}
 
-	// The question is whether the daemon can use this file, which is not what
-	// os.Stat answers: a directory stat succeeds while being no config file at
-	// all, so the probe used to report `ok` for a path that contributes nothing.
-	// Reading it is what Load does, so reading it is what this reports on.
-	//
-	// An unusable config is still not a hard failure. The built-in defaults are
-	// a working configuration, so this warns and the exit code stays 0.
 	if _, err := os.ReadFile(cfg.CliampConfig); err != nil {
-		// The path is already on this line, so report the reason alone rather
-		// than the PathError's restatement of it.
 		var pathError *os.PathError
 		if errors.As(err, &pathError) {
 			err = pathError.Err
@@ -177,6 +189,9 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 // how the plugin's release line compares to this daemon's. The running daemon
 // logs the same relation, so this answers the question the warning raises
 // without requiring the user to read startup logs.
+//
+// Both transports report the relation the same way, so the helper below words it
+// once for this path and for the state document's.
 func pluginVersion(ctx context.Context, states <-chan playback.State) (string, string) {
 	timer := time.NewTimer(snapshotWait)
 	defer timer.Stop()
@@ -189,8 +204,6 @@ func pluginVersion(ctx context.Context, states <-chan playback.State) (string, s
 			if state.PluginVersion == "" {
 				return "warn", "the plugin published no version, so it predates the version report"
 			}
-			// Both transports report the relation the same way, so the helper
-			// words it once for this path and the state document's.
 			return relation(state.PluginVersion)
 		case <-timer.C:
 			return "warn", "no retained snapshot, so the plugin version is unknown"
@@ -205,12 +218,13 @@ func pluginVersion(ctx context.Context, states <-chan playback.State) (string, s
 // naming which half is behind is the answer either way. The sentence itself comes
 // from version.Explain, which is what the running daemon's warning is worded
 // from too, so the log and the report cannot describe one pairing two ways.
+//
+// Skew warns rather than fails, exactly as the running daemon does: a mismatch is
+// not this command's own failure, and the user may be gating a start on its exit
+// code.
 func relation(reported string) (string, string) {
 	reported = normalize(reported)
 	rel := version.Relate(reported, version.Number)
-	// Skew warns rather than fails, exactly as the running daemon does: a
-	// mismatch is not this command's own failure, and the user may be gating a
-	// start on its exit code.
 	status := "warn"
 	if rel == version.Same {
 		status = "ok"

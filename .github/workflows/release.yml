@@ -1,3 +1,14 @@
+# Publishes a release: it checks the pushed tag against the version the daemon
+# reports, builds the daemon for both supported architectures, and uploads the
+# archives, their checksums, and the attestation install.sh verifies before it
+# installs anything.
+#
+# The comments below are attached to the steps they explain, which is where a
+# reader looks for them; the width bound and the sentence rules still apply.
+#
+# The tag pattern is the only place a release starts and, apart from the version
+# constant the build job compares against, the only thing that connects a pushed
+# tag to what the archives contain.
 name: Release
 
 on:

@@ -1,5 +1,9 @@
 package version_test
 
+// This file holds the workflow-runner guard: it reads every GitHub Actions
+// workflow and fails on a runner image that floats, which is the CI-side half of
+// the release discipline the version package otherwise keeps.
+
 import (
 	"path/filepath"
 	"regexp"

@@ -1,4 +1,16 @@
+// Command cliamp-rpcd mirrors Cliamp playback into a Discord Rich Presence
+// activity. It is the daemon half of the plugin; the Lua half ships at the
+// repository root.
 package main
+
+// This file wires the process together. Configuration is read once at startup,
+// and the process then either answers and exits (--version, --check) or runs
+// until it is interrupted, clearing the activity on its way out.
+//
+// The explicit stop() before os.Exit in the --check path is load-bearing.
+// os.Exit skips deferred calls, so the deferred stop() never runs on that path,
+// and deleting the explicit one because the defer looks like it covers the case
+// is the exact mistake this paragraph exists to prevent.
 
 import (
 	"context"
@@ -31,7 +43,6 @@ func main() {
 		return
 	}
 	if cfg.ShowCheck {
-		// os.Exit skips deferred calls, so stop the signal handler explicitly.
 		code := daemon.Check(ctx, cfg)
 		stop()
 		os.Exit(code)

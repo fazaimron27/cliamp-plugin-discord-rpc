@@ -1,4 +1,12 @@
 #!/bin/sh
+# Removes what install.sh put down: the daemon binary and the systemd user unit,
+# from the same two directories install.sh defaults to and overridable the same
+# way.
+#
+# The unit is stopped and disabled first, so nothing is left running a binary
+# that is about to disappear, and nothing else is touched: the Cliamp plugin, the
+# configuration, and the playback state belong to the user and are not this
+# script's to remove.
 set -eu
 
 bin_dir="${CLIAMP_RPC_BIN_DIR:-${HOME:?HOME is not set}/.local/bin}"

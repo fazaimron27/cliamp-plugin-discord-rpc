@@ -1,5 +1,10 @@
 package daemon
 
+// This file exercises the --check diagnostic on the file transport: a live
+// document, a missing one, one this daemon cannot read, one past its heartbeat
+// window, the plugin relation read from the document, a transport override the
+// plugin cannot see, and the probe list the report promises.
+
 import (
 	"bytes"
 	"context"
@@ -13,7 +18,9 @@ import (
 )
 
 // stateFileConfig is a diagnostic configured for the file transport, with no
-// socket: a report that needs one is a report that ignores the transport.
+// socket: a report that needs one is a report that ignores the transport. The
+// Last.fm key is set so the report's only remaining warning is the one a test is
+// looking for, an absent key warning by design.
 func stateFileConfig(path string) config.Config {
 	return config.Config{
 		ApplicationID:   config.DefaultApplicationID,
@@ -21,9 +28,7 @@ func stateFileConfig(path string) config.Config {
 		TransportSource: config.SourceFile,
 		StatePath:       path,
 		StateMaxAge:     time.Minute,
-		// Set so the report's only remaining warning is the one a test is
-		// looking for: an absent key warns by design.
-		LastFMAPIKey: "configured-key",
+		LastFMAPIKey:    "configured-key",
 	}
 }
 
@@ -35,6 +40,11 @@ func runCheckReport(t *testing.T, cfg config.Config) (int, string) {
 	return code, out.String()
 }
 
+// A live state document passes the check. The plugin relation comes from the
+// document itself — there is no subscription to read a retained snapshot from —
+// and it is asserted as the sentence version.Explain words, which pins which
+// relation the document produced rather than only that some plugin line
+// appeared.
 func TestCheckPassesForALiveStateFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	writeStateDocument(t, path, map[string]any{"title": "Playing", "plugin_version": version.Number})
@@ -47,10 +57,6 @@ func TestCheckPassesForALiveStateFile(t *testing.T) {
 	if strings.Contains(report, "fail") {
 		t.Errorf("a live document was reported as a failure:\n%s", report)
 	}
-	// The plugin line has to come from the document here: there is no
-	// subscription to read a retained snapshot from. It is asserted as the
-	// sentence version.Explain words, so this pins which relation the document
-	// produced rather than only that some plugin line appeared at all.
 	if want := version.Explain(version.Same, version.Number, version.Number); !strings.Contains(report, want) {
 		t.Errorf("report does not give the document's plugin relation as %q:\n%s", want, report)
 	}
@@ -59,6 +65,8 @@ func TestCheckPassesForALiveStateFile(t *testing.T) {
 	}
 }
 
+// With no document at all the check exits 1 and names the path it looked for,
+// which is the file transport's counterpart to a socket that is not there.
 func TestCheckFailsWhenTheStateFileIsMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 
@@ -91,6 +99,10 @@ func TestCheckExplainsADocumentItCannotRead(t *testing.T) {
 	}
 }
 
+// A document whose heartbeat is older than the configured window fails the
+// check and names the window it missed. A document a crash left behind is not a
+// working transport, and saying so is the point: the run loop would be showing
+// nothing.
 func TestCheckFailsForADocumentPastTheWindow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	old := time.Now().Add(-time.Hour).Unix()
@@ -98,8 +110,6 @@ func TestCheckFailsForADocumentPastTheWindow(t *testing.T) {
 
 	code, report := runCheckReport(t, stateFileConfig(path))
 
-	// A document left behind by a crash is not a working transport, and saying
-	// so is the point: the run loop would be showing nothing.
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1\n%s", code, report)
 	}
@@ -108,14 +118,14 @@ func TestCheckFailsForADocumentPastTheWindow(t *testing.T) {
 	}
 }
 
+// A document reporting an older plugin line warns rather than fails: the daemon
+// can still run, which is the same rule the run loop follows.
 func TestCheckReportsThePluginRelationFromTheDocument(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	writeStateDocument(t, path, map[string]any{"plugin_version": olderLine(t)})
 
 	code, report := runCheckReport(t, stateFileConfig(path))
 
-	// A plugin older than the daemon warns rather than fails: the daemon can
-	// still run, which is the same rule the run loop follows.
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\n%s", code, report)
 	}
@@ -124,6 +134,10 @@ func TestCheckReportsThePluginRelationFromTheDocument(t *testing.T) {
 	}
 }
 
+// An override the plugin cannot see warns rather than fails, naming both
+// transports: the daemon is doing what it was told, but a mismatch looks
+// exactly like a broken Cliamp from the outside, the daemon reading one source
+// while the plugin writes the other.
 func TestCheckNamesATransportOverrideThePluginCannotSee(t *testing.T) {
 	socket := serveCheckCliamp(t, version.Number)
 	cfg := config.Config{
@@ -136,9 +150,6 @@ func TestCheckNamesATransportOverrideThePluginCannotSee(t *testing.T) {
 
 	code, report := runCheckReport(t, cfg)
 
-	// The daemon is doing what it was told, so this is a warning. It is here
-	// because a mismatch looks exactly like a broken Cliamp from the outside:
-	// the daemon reads one source while the plugin writes the other.
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\n%s", code, report)
 	}
@@ -152,6 +163,9 @@ func TestCheckNamesATransportOverrideThePluginCannotSee(t *testing.T) {
 	}
 }
 
+// When the two halves agree the report names the transport in use and marks the
+// line ok, not merely present: a warning here is the whole thing this report
+// exists to distinguish.
 func TestCheckReportsTheTransportWhenTheHalvesAgree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	writeStateDocument(t, path, map[string]any{})
@@ -164,8 +178,6 @@ func TestCheckReportsTheTransportWhenTheHalvesAgree(t *testing.T) {
 	if !strings.Contains(report, "transport") || !strings.Contains(report, config.TransportFile) {
 		t.Fatalf("report does not name the transport in use:\n%s", report)
 	}
-	// The line has to be ok, not merely present: a warning here is the whole
-	// thing this report exists to distinguish.
 	if !strings.Contains(report, "transport ok") {
 		t.Fatalf("agreeing halves did not report an ok transport:\n%s", report)
 	}

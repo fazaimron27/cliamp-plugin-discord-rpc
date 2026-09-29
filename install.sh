@@ -1,4 +1,18 @@
 #!/bin/sh
+# Installs the daemon and its systemd user unit: the binary into ~/.local/bin and
+# the unit into the systemd user directory, both overridable by flag or by
+# environment variable.
+#
+# It runs from one of two places. Beside an unpacked release archive, where the
+# binary and the unit already sit in the script's own directory, it installs what
+# is there. Anywhere else it downloads the archive for the version pinned in the
+# variable below and verifies that download before use — the GitHub attestation
+# first, then the published checksum — so a tampered or truncated archive fails
+# rather than being installed.
+#
+# The unit is installed but deliberately neither enabled nor started: whether the
+# daemon should run yet is the user's decision, and the script prints what to do
+# next rather than making it.
 set -eu
 
 repository="fazaimron27/cliamp-plugin-discord-rpc"

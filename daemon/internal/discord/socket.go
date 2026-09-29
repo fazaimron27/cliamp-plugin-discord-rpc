@@ -1,5 +1,9 @@
 package discord
 
+// This file lists the sockets Discord may be listening on: it builds the
+// candidate paths, in Discord's own search order, that the client dials one by
+// one until one answers.
+
 import (
 	"fmt"
 	"os"

@@ -9,6 +9,21 @@
 // reconnect and there is nothing to reconnect here.
 package statewatch
 
+// This file is the file transport: it watches the state document the plugin
+// writes with cliamp.fs and turns it into the same stream of playback.State the
+// IPC subscription delivers, so the run loop never branches on the transport.
+//
+// The document carries two clocks with different jobs, and that split is the
+// point of the format. updated_at moves only when the playback fields do, which
+// keeps the interpolated progress bar anchored; heartbeat moves on every write
+// whether or not anything changed, and liveness is read from it alone. A track
+// that is simply playing on is therefore never mistaken for a Cliamp that has
+// stopped reporting.
+//
+// The file is replaced rather than appended to, so the same path is left behind
+// by a clean quit, by a crash, and by a first start. Which of those the loop
+// believes is decided in watch, where the reasoning for each is written down.
+
 import (
 	"context"
 	"encoding/json"
@@ -106,6 +121,10 @@ func read(path string) (snapshot, error) {
 
 // decode maps a document onto the daemon's state, rejecting one that cannot be
 // trusted to describe the track.
+//
+// The shared snapshot rules apply here as much as on the IPC side: what the file
+// carries is still a snapshot of the same player, and the daemon is not supposed
+// to have to know which transport it arrived by.
 func decode(data []byte) (snapshot, error) {
 	var parsed document
 	if err := json.Unmarshal(data, &parsed); err != nil {
@@ -130,9 +149,6 @@ func decode(data []byte) (snapshot, error) {
 		PluginVersion: parsed.PluginVersion,
 		ObservedAt:    parsed.UpdatedAt,
 	}
-	// The shared rules for a snapshot apply here too: whatever the file carries
-	// is still a snapshot of the same player, and the daemon must not have to
-	// know which transport it arrived by.
 	if err := state.Validate(); err != nil {
 		return snapshot{}, err
 	}
@@ -193,15 +209,16 @@ func Inspect(path string, maxAge time.Duration) Detail {
 // Cliamp that crashed would leave its last track on Discord indefinitely.
 //
 // The returned channel stays open until ctx is cancelled.
+//
+// The directory is watched rather than the document, because the plugin writes
+// with a plain write that replaces the file: a watch on the document itself
+// would be watching an inode that the very next write leaves behind, and the
+// removal on quit would be missed along with it.
 func Subscribe(ctx context.Context, path string, maxAge time.Duration) (<-chan playback.State, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("watch the state file: %w", err)
 	}
-	// The directory is watched rather than the document, because the plugin
-	// writes with a plain write that replaces the file: a watch on the document
-	// itself would be watching an inode that the very next write leaves behind,
-	// and the removal on quit would be missed as well.
 	if err := watcher.Add(filepath.Dir(path)); err != nil {
 		_ = watcher.Close()
 		return nil, fmt.Errorf("watch the state file: %w", err)
@@ -213,12 +230,40 @@ func Subscribe(ctx context.Context, path string, maxAge time.Duration) (<-chan p
 }
 
 // watch is the goroutine behind Subscribe. It closes states when it returns.
+//
+// It reads the document once before entering the loop, so a daemon started
+// mid-track shows that track — the same thing the IPC transport gets from the
+// retained snapshot — and the watch is armed before that read, so a write cannot
+// slip into the gap between the two.
+//
+// Every read lands in one of four cases, and the case decides what the loop
+// reports. A missing document is the plugin's clean quit, and retracts. An
+// unreadable one was most likely caught mid-write, and the next write replaces
+// it, so a single bad read is not evidence about the track and the state is left
+// as it is; that also keeps a document this daemon cannot parse from being
+// mistaken for a Cliamp that quit, since the deadline below retracts it if the
+// writes have really stopped. A document whose heartbeat has aged out was left
+// behind by a crash, so it must not resurrect the last track. A live one is
+// delivered, and arms the deadline that will retract it when its beats stop.
+//
+// A retraction is suppressed while nothing is showing, because this channel
+// reports changes: a stopped state for a document that was never reported as
+// playing would be inventing one.
+//
+// The deadline is measured from the heartbeat rather than from now, so a
+// document that has already lapsed fires at once instead of lingering for
+// another window, which is how time.Timer reads a negative duration. Both timers
+// start stopped and are reset as they are armed, which is safe without draining
+// them, since a timer's channel is unbuffered.
+//
+// The watched directory may hold other things Cliamp keeps there, so an event
+// naming another path is ignored. An error from the watcher means an event may
+// have been dropped without the document being read, so the loop reads it again:
+// one file read closes that gap.
 func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge time.Duration, states chan<- playback.State) {
 	defer close(states)
 	defer func() { _ = watcher.Close() }()
 
-	// Go 1.23 made a timer's channel unbuffered, so Stop and Reset are safe to
-	// call at any time without draining what they were armed for.
 	deadline := time.NewTimer(time.Hour)
 	settle := time.NewTimer(time.Hour)
 	deadline.Stop()
@@ -227,10 +272,6 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 	defer settle.Stop()
 	var settling <-chan time.Time
 
-	// showing is whether the daemon was last told about a live track. A retract
-	// with nothing showing has nothing to retract: this channel reports
-	// changes, and reporting "stopped" for a document that was never reported
-	// as playing would be inventing one.
 	var showing bool
 
 	deliver := func(state playback.State) bool {
@@ -243,9 +284,6 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 	}
 
 	armDeadline := func(current snapshot) {
-		// Measured from the heartbeat, not from now, so a document that has
-		// already lapsed fires at once instead of lingering for another window.
-		// time.Timer treats a negative duration that way.
 		deadline.Reset(current.lapseIn(time.Now(), maxAge))
 	}
 
@@ -258,8 +296,6 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 		return deliver(playback.State{Status: "stopped", ObservedAt: time.Now().Unix()})
 	}
 
-	// live reports whether the document's heartbeat is recent enough to be
-	// evidence that Cliamp is still running.
 	live := func(current snapshot) bool {
 		return current.liveAt(time.Now(), maxAge)
 	}
@@ -268,18 +304,10 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 		current, err := read(path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			// The plugin removes the document on a clean quit.
 			return retract()
 		case err != nil:
-			// Present but unreadable, a document caught mid-write most likely:
-			// the next write replaces it, so one bad read is not evidence about
-			// the track. Leaving the state as it is also means a document this
-			// daemon cannot parse never gets mistaken for Cliamp having quit —
-			// the deadline retracts it if the writes have really stopped.
 			return true
 		case !live(current):
-			// Left behind by a crash: too old to be evidence that Cliamp is
-			// running, so it must not resurrect the last track.
 			return retract()
 		default:
 			armDeadline(current)
@@ -288,9 +316,6 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 		}
 	}
 
-	// Before the loop, so a daemon started mid-track shows the track, which is
-	// what the IPC transport gets from the retained snapshot. Watching comes
-	// first, so a write cannot slip between the check and the watch.
 	if !load() {
 		return
 	}
@@ -303,16 +328,12 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 			if !ok {
 				return
 			}
-			// The watched directory may hold other things Cliamp keeps there.
 			if filepath.Clean(event.Name) != filepath.Clean(path) {
 				continue
 			}
 			settle.Reset(settleDelay)
 			settling = settle.C
 		case <-watcher.Errors:
-			// The watcher reports here when it could not deliver an event, so
-			// the document may have changed with nothing to say so. Reading it
-			// again costs one file read and closes that gap.
 			if !load() {
 				return
 			}

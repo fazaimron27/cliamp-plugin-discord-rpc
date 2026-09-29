@@ -1,5 +1,9 @@
 package artwork
 
+// This file tests the resolver's retention from inside the package, where the
+// lookup map is visible: an entry that has expired must be dropped when the
+// next lookup is written.
+
 import (
 	"context"
 	"net/http"
@@ -14,6 +18,10 @@ import (
 // memory held, and nothing in the public API reports that. Before this was
 // guarded, both lookup maps were written for the daemon's lifetime and never
 // pruned, so a track that failed once held an entry until the process exited.
+//
+// The clock moves a day on, past any expiry the resolver applies, so the first
+// track can no longer be worth holding; the second lookup is what has to notice
+// and drop it.
 func TestLastFMForgetsExpiredLookupsInsteadOfGrowingForever(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"track":{"album":{"image":[{"#text":"https://img/large.jpg"}]}}}`))
@@ -34,8 +42,6 @@ func TestLastFMForgetsExpiredLookupsInsteadOfGrowingForever(t *testing.T) {
 		t.Fatalf("lookups held = %d, want 1", held)
 	}
 
-	// The next day: past any expiry the resolver applies, so the first track can
-	// no longer be worth holding. The second lookup is what has to notice.
 	now = now.Add(24 * time.Hour)
 	if _, err := resolver.Resolve(context.Background(), "Second", "Track"); err != nil {
 		t.Fatal(err)

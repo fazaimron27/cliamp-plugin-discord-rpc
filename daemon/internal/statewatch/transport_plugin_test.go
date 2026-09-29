@@ -1,5 +1,14 @@
 package statewatch_test
 
+// This file holds the agreements between the Lua plugin and the daemon that a
+// text search can check, since nothing here runs the Lua: the values both
+// halves have to compute the same way, and the field names the daemon refuses
+// a document without.
+//
+// They matter because each disagreement fails silently. A plugin writing a
+// schema the daemon does not read, or a path the daemon does not watch, raises
+// no error anywhere: it produces a Discord presence that never appears.
+
 import (
 	"os"
 	"path/filepath"
@@ -12,15 +21,6 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
 )
-
-// Nothing here runs the Lua, so these are the agreements a text search can
-// hold: the values both halves have to compute the same way, and the field
-// names the daemon will refuse a document without.
-//
-// They matter because every one of these disagreements fails silently. A plugin
-// writing a schema the daemon does not read, or a path the daemon does not
-// watch, produces no error anywhere: it produces a Discord presence that never
-// appears.
 
 // pluginSource reads the plugin file, which is also a release archive member.
 // The repository root is three levels above this package: Go runs a test binary
@@ -57,6 +57,9 @@ func TestPluginFallsBackToTheDaemonsDefaultTransport(t *testing.T) {
 	}
 }
 
+// The plugin's schema constant equals the version the daemon reads, so the
+// plugin cannot write a document the daemon refuses for a schema it does not
+// know.
 func TestPluginWritesTheSchemaTheDaemonReads(t *testing.T) {
 	got := pluginConstant(t, `local SCHEMA_VERSION = (\d+)`, "SCHEMA_VERSION")
 	if want := strconv.Itoa(statewatch.SchemaVersion); got != want {
@@ -64,6 +67,9 @@ func TestPluginWritesTheSchemaTheDaemonReads(t *testing.T) {
 	}
 }
 
+// The heartbeat interval leaves the daemon's window room to tolerate two missed
+// beats rather than one: a beat that lands just past the deadline would
+// otherwise clear the presence of a Cliamp that is running perfectly well.
 func TestPluginHeartbeatsWellInsideTheDaemonsWindow(t *testing.T) {
 	seconds, err := strconv.Atoi(pluginConstant(t, `local HEARTBEAT_SECS = (\d+)`, "HEARTBEAT_SECS"))
 	if err != nil {
@@ -72,9 +78,6 @@ func TestPluginHeartbeatsWellInsideTheDaemonsWindow(t *testing.T) {
 	if seconds <= 0 {
 		t.Fatalf("heartbeat = %ds", seconds)
 	}
-	// The window has to tolerate two missed beats rather than one: a beat that
-	// lands just past the deadline would otherwise clear the presence of a
-	// Cliamp that is running perfectly well.
 	if config.DefaultStateMaxAge < 3*time.Duration(seconds)*time.Second {
 		t.Fatalf("a %v window against a %ds heartbeat tolerates fewer than two missed beats", config.DefaultStateMaxAge, seconds)
 	}
@@ -99,17 +102,18 @@ func TestPluginComposesTheSameStatePathAsTheDaemon(t *testing.T) {
 	}
 }
 
-// The daemon refuses a document missing any of these and says so only in a log
-// line, which leaves the user with a presence that never appears. A field
-// renamed on one side alone has to fail here instead.
+// The plugin assigns every field the daemon requires, so a field renamed on one
+// side alone fails here instead of silently. The daemon refuses a document
+// missing any of these and says so only in a log line, which leaves the user
+// with a presence that never appears. What is checked is the assignment, not
+// the name: a field that only appears in a comment is a field the plugin does
+// not write.
 func TestPluginWritesEveryFieldTheDaemonRequires(t *testing.T) {
 	source := pluginSource(t)
 	for _, field := range []string{
 		"status", "title", "artist", "album", "path", "year", "duration",
 		"position", "stream", "plugin_version", "updated_at", "heartbeat",
 	} {
-		// The assignment, not the name: a field that only appears in a comment is
-		// a field the plugin does not write.
 		if !strings.Contains(source, field+" =") {
 			t.Errorf("discord-rpc.lua never assigns %s, which the daemon requires", field)
 		}
