@@ -1,6 +1,15 @@
 // Package discord implements Discord RPC over the local IPC socket.
 package discord
 
+// This file is the Discord IPC client: it discovers a socket, verifies the peer
+// it reached, completes the handshake, and publishes activities over the
+// connection it opened.
+//
+// Connect depends on SocketPaths being ordered. The first candidate is the one
+// Discord would have published, so it is the one named when nothing answers;
+// naming a later one would report a path that was never plausible to begin
+// with.
+
 import (
 	"context"
 	"encoding/json"
@@ -39,23 +48,21 @@ func NewClient(applicationID string) *Client {
 func (c *Client) Connected() bool { return c.conn != nil }
 
 // Connect probes known socket locations and completes Discord's handshake.
+//
+// Two failures are kept apart because they call for different fixes. A candidate
+// that was never there says Discord is not running; a candidate that accepted
+// the connection and then refused the handshake says Discord is running but
+// would not talk to us. Only the second one is reported when both occur, because
+// it is the one that explains the outcome.
 func (c *Client) Connect(ctx context.Context) error {
 	if c.conn != nil {
 		return nil
 	}
-	// Two failures are kept apart because they call for different fixes. A
-	// candidate that was never there says Discord is not running; a candidate
-	// that accepted the connection and then refused the handshake says Discord
-	// is running but would not talk to us. Only the second one is reported when
-	// both occur, because it is the one that explains the outcome.
 	var absentErr, refusedErr error
 	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
 	for _, path := range SocketPaths() {
 		conn, err := dialer.DialContext(ctx, "unix", path)
 		if err != nil {
-			// SocketPaths is ordered, so the first candidate is the one Discord
-			// would have published. Naming a later one reports a path that was
-			// never plausible to begin with.
 			if absentErr == nil {
 				absentErr = err
 			}

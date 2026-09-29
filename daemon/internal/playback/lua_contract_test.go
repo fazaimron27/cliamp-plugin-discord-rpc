@@ -1,5 +1,16 @@
 package playback_test
 
+// This file is the Lua contract harness. The plugin is half this project's
+// shipped surface and none of it is Go, so nothing else checks that what it
+// publishes is what the daemon accepts; these tests run the real discord-rpc.lua
+// against a stubbed Cliamp API and hold each payload to State's JSON tags and to
+// Validate.
+//
+// luajit is optional locally but required in CI, where CLIAMP_REQUIRE_LUA turns
+// a missing interpreter into a failure rather than a skip. Without that the
+// suite would pass on a machine that never ran the contract, which is the one
+// way it could report success without checking anything.
+
 import (
 	"bytes"
 	"encoding/json"
@@ -15,11 +26,6 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 )
 
-// The plugin is half this project's shipped surface and none of it is Go, so
-// nothing has ever checked that what it publishes is what the daemon accepts.
-// These tests run the real Lua file against a stubbed Cliamp API and hold the
-// result to the daemon's own contract.
-
 // publishedSnapshot is one call the plugin made to p:publish.
 type publishedSnapshot struct {
 	Topic   string          `json:"topic"`
@@ -33,8 +39,7 @@ type pluginRun struct {
 }
 
 // runScenario executes discord-rpc.lua under the stub harness and returns what
-// it published. luajit is treated as optional locally and required in CI, where
-// CI sets CLIAMP_REQUIRE_LUA so the suite cannot pass by skipping.
+// it published.
 func runScenario(t *testing.T, scenario string) pluginRun {
 	t.Helper()
 
@@ -88,7 +93,7 @@ func stateKeys(t *testing.T) []string {
 	return keys
 }
 
-// scenarios that must produce exactly one snapshot. Without this control the
+// Scenarios that must produce exactly one snapshot. Without this control the
 // contract test below would pass vacuously on a plugin that publishes nothing.
 func TestPluginPublishesKnownScenarios(t *testing.T) {
 	for _, scenario := range []string{"playing", "quit"} {

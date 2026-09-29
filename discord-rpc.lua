@@ -57,16 +57,17 @@ end
 -- carries only the fields it changed, so what it leaves out is read from the
 -- player rather than carried over: the snapshot stands on its own, whichever
 -- transport takes it.
+--
+-- The daemon accepts only playing, paused and stopped, and every snapshot either
+-- replaces the last retained one or overwrites the last good document, so an
+-- unusable snapshot is destructive on its way to being discarded. Cliamp answers
+-- nil when it has nothing to report, which is not the same as "stopped", so
+-- withhold it: returning nil is how this function says so, and each transport
+-- decides what withholding means for it. The status enum is deliberately not
+-- duplicated here — a second copy would be one to drift, and the contract test
+-- cannot catch a drift it shares.
 local function snapshot(event, forced_status)
   event = event or {}
-  -- The daemon accepts only playing, paused and stopped, and every snapshot
-  -- either replaces the last retained one or overwrites the last good document,
-  -- so an unusable snapshot is destructive on its way to being discarded.
-  -- Cliamp answers nil when it has nothing to report, which is not the same as
-  -- "stopped", so withhold it: returning nil is how this function says so, and
-  -- each transport decides what withholding means for it. The status enum is
-  -- deliberately not duplicated here — a second copy would be one to drift, and
-  -- the contract test cannot catch a drift it shares.
   local status = forced_status or value(event, "status", cliamp.player.state)
   if status == nil or status == "" then
     return nil
@@ -113,10 +114,11 @@ end
 if TRANSPORT == "file" then
   local document = { v = SCHEMA_VERSION }
 
+  -- Rewrites the document so the daemon can see the plugin is still alive. A
+  -- beat is liveness for the last good snapshot, so there is nothing to keep
+  -- alive until one has been written, and a document with no status is one the
+  -- daemon refuses anyway.
   local function flush()
-    -- A beat is liveness for the last good snapshot, so there is nothing to
-    -- keep alive until one has been written, and a document with no status is
-    -- one the daemon refuses anyway.
     if document.status == nil then
       return
     end
@@ -143,14 +145,14 @@ if TRANSPORT == "file" then
   end
 
   emit = change
+  -- The directory is where Cliamp keeps its own state, so it can be missing on a
+  -- first run. The first write completes the document, which is why the beat
+  -- timer is armed after it rather than before. That beat carries no change: it
+  -- rewrites the document so the daemon can tell a Cliamp running quietly from
+  -- one that stopped mid-track.
   start = function()
-    -- The directory is where Cliamp keeps its own state, so it can be missing
-    -- on a first run. The first write completes the document, which is why the
-    -- beat timer is armed after it rather than before.
     cliamp.fs.mkdir(STATE_DIR)
     change()
-    -- A beat is liveness, not a change: it rewrites the document so the daemon
-    -- can tell a Cliamp running quietly from one that stopped mid-track.
     cliamp.timer.every(HEARTBEAT_SECS, flush)
   end
 end

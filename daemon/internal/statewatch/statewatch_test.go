@@ -1,5 +1,19 @@
 package statewatch
 
+// This file tests the file transport: how the state document is decoded into
+// the daemon's playback state, how the heartbeat dates it, and how a
+// subscription reports what the document says. The document's writer, the Lua
+// plugin, is exercised separately in transport_plugin_test.go.
+//
+// The heartbeat is what makes a document evidence that Cliamp is running. A
+// document is live only while its beat is inside the window, and a beat exactly
+// one window old has already lapsed. The plugin rewrites the beat without
+// moving the playhead, so a document is dated by updated_at and never by the
+// beat.
+//
+// A subscription reports changes to what the daemon displays and nothing else,
+// which is why it stays quiet with no document yet and with one long lapsed.
+
 import (
 	"context"
 	"encoding/json"
@@ -82,6 +96,12 @@ func expectQuiet(t *testing.T, states <-chan playback.State, within time.Duratio
 	}
 }
 
+// A document that varies every field is decoded field by field. ObservedAt must
+// come from the plugin's updated_at, the change time the IPC envelope carries
+// for the other transport, and not from the heartbeat: a heartbeat-only rewrite
+// would otherwise look like playhead movement and re-anchor the progress bar on
+// every beat. The path becomes the daemon's track key, which is what keeps a
+// resumed track's timeline rather than restarting its progress bar.
 func TestDecodeMapsTheDocumentOntoTheDaemonState(t *testing.T) {
 	current, err := decode(documentFor(t, map[string]any{
 		"status": "paused", "title": "Other", "artist": "Someone", "position": 61,
@@ -93,10 +113,6 @@ func TestDecodeMapsTheDocumentOntoTheDaemonState(t *testing.T) {
 	}
 	state := current.state
 
-	// ObservedAt is the plugin's own change time, which is what the IPC envelope
-	// carries for the other transport. The heartbeat must not become it: a
-	// heartbeat-only rewrite would then look like playhead movement and the
-	// progress bar would re-anchor on every beat.
 	if state.ObservedAt != 1000 {
 		t.Errorf("observed at = %d, want the document's updated_at 1000", state.ObservedAt)
 	}
@@ -109,8 +125,6 @@ func TestDecodeMapsTheDocumentOntoTheDaemonState(t *testing.T) {
 	if state.Position != 61 || state.Duration != 300 || state.Year != 2001 || !state.Stream {
 		t.Errorf("state = %+v", state)
 	}
-	// The path reaches the daemon's track key, which is what keeps a resumed
-	// track's timeline rather than restarting its progress bar.
 	if state.Path != "/music/track.flac" {
 		t.Errorf("path = %q", state.Path)
 	}
@@ -119,6 +133,11 @@ func TestDecodeMapsTheDocumentOntoTheDaemonState(t *testing.T) {
 	}
 }
 
+// A document the daemon cannot trust is refused with an error naming the field
+// it objected to: a missing heartbeat, change time, or status; a status the
+// daemon has no such state for; and a schema version it does not read, whether
+// absent or from the future. Bytes that are not a document at all are refused
+// the same way.
 func TestDecodeRejectsDocumentsItCannotTrust(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -151,6 +170,13 @@ func TestDecodeRejectsDocumentsItCannotTrust(t *testing.T) {
 	})
 }
 
+// Inspect reports what state the document is in and why it cannot be used: no
+// document at all, a live one, one left behind by a crash, and one in a schema
+// the daemon does not read. A lapsed document reports its age, which is what
+// tells the user how long ago Cliamp stopped rather than leaving it to be
+// inferred from the flag. An unknown schema reports the problem, which is the
+// case the run loop cannot explain on its own: it stays quiet, and the reason
+// is visible only by reading the document.
 func TestInspectSaysWhyADocumentCannotBeUsed(t *testing.T) {
 	t.Run("nothing there", func(t *testing.T) {
 		detail := Inspect(statePath(t), time.Minute)
@@ -184,8 +210,6 @@ func TestInspectSaysWhyADocumentCannotBeUsed(t *testing.T) {
 		if !detail.Present || !detail.Lapsed {
 			t.Fatalf("detail = %+v", detail)
 		}
-		// The age is what tells the user how long ago Cliamp stopped, so it has
-		// to be reported rather than inferred from the flag.
 		if detail.Age < 55*time.Minute {
 			t.Fatalf("age = %v, want about an hour", detail.Age)
 		}
@@ -195,8 +219,6 @@ func TestInspectSaysWhyADocumentCannotBeUsed(t *testing.T) {
 		path := statePath(t)
 		writeDocument(t, path, map[string]any{"v": 2})
 
-		// This is the case the run loop cannot explain on its own: it stays
-		// quiet, and the reason is only visible by reading the document.
 		detail := Inspect(path, time.Minute)
 		if !detail.Present || detail.Problem == nil {
 			t.Fatalf("detail = %+v", detail)
@@ -207,6 +229,9 @@ func TestInspectSaysWhyADocumentCannotBeUsed(t *testing.T) {
 	})
 }
 
+// A document already on disk is delivered as soon as the subscription starts. A
+// daemon started mid-track must show the track, which is what the IPC transport
+// gets from retention and what reading the file at startup gives.
 func TestSubscribeDeliversTheDocumentAlreadyOnDisk(t *testing.T) {
 	path := statePath(t)
 	writeDocument(t, path, map[string]any{"title": "Already Playing", "position": 12})
@@ -215,14 +240,15 @@ func TestSubscribeDeliversTheDocumentAlreadyOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A daemon started mid-track must show the track, which is what the IPC
-	// transport gets from retention and what reading the file on startup gives.
 	state := receive(t, states, 3*time.Second)
 	if state.Title != "Already Playing" || state.Position != 12 {
 		t.Fatalf("state = %+v", state)
 	}
 }
 
+// Rewriting the document with a new title delivers the change on the same
+// subscription, so a subscription tracks the document rather than reading it
+// once.
 func TestSubscribeDeliversChanges(t *testing.T) {
 	path := statePath(t)
 	writeDocument(t, path, map[string]any{"title": "First"})
@@ -241,6 +267,10 @@ func TestSubscribeDeliversChanges(t *testing.T) {
 	}
 }
 
+// A document left behind by a crash is older than the window, so it is not
+// evidence that Cliamp is running and is not reported as playing. It is not
+// reported as stopped either: nothing was showing, and this channel reports
+// changes to what the daemon shows, of which there is none.
 func TestSubscribeIgnoresADocumentThatAlreadyAgedOut(t *testing.T) {
 	path := statePath(t)
 	old := time.Now().Add(-time.Hour).Unix()
@@ -250,13 +280,13 @@ func TestSubscribeIgnoresADocumentThatAlreadyAgedOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A document left behind by a crash must not be reported as playing: it is
-	// older than the window, so it is not evidence that Cliamp is running. It is
-	// not reported as stopped either — nothing was showing, and this channel
-	// reports changes to what the daemon shows, of which there is none.
 	expectQuiet(t, states, 300*time.Millisecond)
 }
 
+// lapseIn and liveAt are exact at the window's boundary, which the integration
+// tests cannot pin down: a heartbeat exactly one window old is not evidence that
+// Cliamp is running, so a document at that age is not delivered as playing,
+// while one a nanosecond inside the window still is.
 func TestSnapshotLapsesWithItsHeartbeat(t *testing.T) {
 	beat := time.Unix(1000, 0)
 	current := snapshot{heartbeat: beat}
@@ -280,9 +310,6 @@ func TestSnapshotLapsesWithItsHeartbeat(t *testing.T) {
 		})
 	}
 
-	// The boundary is the case the integration tests cannot pin down: a
-	// heartbeat exactly one window old is not evidence that Cliamp is running,
-	// so a document at that age must not be delivered as playing.
 	if current.liveAt(beat.Add(maxAge), maxAge) {
 		t.Error("a document exactly one window old was still counted as live")
 	}
@@ -291,14 +318,15 @@ func TestSnapshotLapsesWithItsHeartbeat(t *testing.T) {
 	}
 }
 
+// A document whose heartbeat stops advancing lapses and is reported as stopped,
+// after first being reported as playing. The window has to clear the format's
+// one-second heartbeat granularity: the document carries whole seconds, so a
+// window of a few hundred milliseconds can already have lapsed by the time the
+// test subscribes, which would make this a race rather than a test.
 func TestSubscribeReportsStoppedWhenTheHeartbeatStops(t *testing.T) {
 	path := statePath(t)
 	writeDocument(t, path, map[string]any{"title": "Playing"})
 
-	// The window has to clear the format's one-second heartbeat granularity: the
-	// document carries whole seconds, so a window of a few hundred milliseconds
-	// can already have lapsed by the time the test subscribes, which would make
-	// this a race rather than a test.
 	maxAge := 3 * time.Second
 	states, err := Subscribe(context.Background(), path, maxAge)
 	if err != nil {
@@ -313,6 +341,10 @@ func TestSubscribeReportsStoppedWhenTheHeartbeatStops(t *testing.T) {
 	}
 }
 
+// Removing the document reports stopped and keeps the subscription watching.
+// The plugin removes the document on a clean quit, so removal is an event the
+// daemon must act on rather than a reason to stop watching, and a Cliamp that
+// recreates the document must be picked up by the same subscription.
 func TestSubscribeTreatsARemovedDocumentAsStoppedAndKeepsWatching(t *testing.T) {
 	path := statePath(t)
 	writeDocument(t, path, map[string]any{"title": "Playing"})
@@ -325,8 +357,6 @@ func TestSubscribeTreatsARemovedDocumentAsStoppedAndKeepsWatching(t *testing.T) 
 		t.Fatalf("the document was not delivered: %+v", state)
 	}
 
-	// The plugin removes the document on a clean quit, so removal is an event
-	// the daemon must act on rather than a reason to stop watching.
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -334,23 +364,26 @@ func TestSubscribeTreatsARemovedDocumentAsStoppedAndKeepsWatching(t *testing.T) 
 		t.Fatalf("a removed document was still reported as playing: %+v", state)
 	}
 
-	// Cliamp restarting recreates it, and the same subscription must carry on.
 	writeDocument(t, path, map[string]any{"title": "Restarted"})
 	if state := receive(t, states, 3*time.Second); state.Title != "Restarted" {
 		t.Fatalf("state after removal = %+v", state)
 	}
 }
 
+// With no directory to watch, Subscribe fails rather than blocking, so the run
+// loop retries with backoff until Cliamp creates the directory instead of
+// reporting a dead transport.
 func TestSubscribeFailsWhileTheDirectoryIsMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "absent", "rpc-state.json")
 
-	// Nothing to watch yet. Failing lets the run loop retry with backoff until
-	// Cliamp creates the directory, rather than reporting a dead transport.
 	if _, err := Subscribe(context.Background(), path, time.Minute); err == nil {
 		t.Fatal("Subscribe succeeded with no directory to watch")
 	}
 }
 
+// Cancelling the context closes the state channel, so an interrupted daemon's
+// subscription ends instead of staying open and watching a document nobody
+// displays.
 func TestSubscribeStopsOnCancellation(t *testing.T) {
 	path := statePath(t)
 	writeDocument(t, path, map[string]any{})
@@ -376,12 +409,13 @@ func TestSubscribeStopsOnCancellation(t *testing.T) {
 	}
 }
 
+// With no document published yet the subscription stays quiet: there is no
+// state to report, and inventing one would clear an activity the daemon had
+// already published.
 func TestSubscribeStaysQuietWhenThereIsNoDocumentYet(t *testing.T) {
 	states, err := Subscribe(context.Background(), statePath(t), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Cliamp has not published anything: there is no state to report, and
-	// inventing one would clear an activity the daemon had already published.
 	expectQuiet(t, states, 300*time.Millisecond)
 }

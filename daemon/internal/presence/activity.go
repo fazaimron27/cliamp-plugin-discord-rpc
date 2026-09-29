@@ -1,6 +1,11 @@
 // Package presence derives Discord activity payloads from playback state.
 package presence
 
+// This file is the presence payload. The Activity envelope and the Assets,
+// Timestamps, and Button structs beneath it mirror the SET_ACTIVITY object
+// Discord accepts, and Build fills them from a playback snapshot: the truncated
+// text, the fallback asset, the buttons, and the timeline anchor.
+
 import (
 	"net/url"
 	"strings"

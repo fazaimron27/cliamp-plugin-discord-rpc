@@ -1,6 +1,12 @@
 // Package artwork resolves public album artwork URLs.
 package artwork
 
+// This file is the Last.fm half of artwork resolution: it asks track.getInfo
+// for a track's image over HTTPS and remembers each answer with an expiry, so a
+// resolved URL is reused and an empty answer is retried rather than refetched
+// on every track change. The absence of artwork is reported as an empty string
+// with no error, because Last.fm returning nothing is not a failure.
+
 import (
 	"context"
 	"encoding/json"
@@ -212,6 +218,10 @@ const (
 //
 // This is a probe rather than a lookup, so it deliberately bypasses r.known. A
 // diagnostic has to report the state of the key, not the state of the cache.
+//
+// A rejected key arrives as an error object inside an HTTP 200 response, so the
+// body is the only place the rejection is visible. Resolve cannot see this,
+// which is why it cannot tell a bad key from a track with no artwork.
 func (r *LastFM) Validate(ctx context.Context) error {
 	body, err := r.get(ctx, url.Values{
 		"method":  {"track.getInfo"},
@@ -224,9 +234,6 @@ func (r *LastFM) Validate(ctx context.Context) error {
 		return err
 	}
 
-	// A rejected key arrives as an error object inside an HTTP 200 response, so
-	// the body is the only place the rejection is visible. Resolve cannot see
-	// this, which is why it cannot tell a bad key from a track with no artwork.
 	var result struct {
 		Error   int    `json:"error"`
 		Message string `json:"message"`

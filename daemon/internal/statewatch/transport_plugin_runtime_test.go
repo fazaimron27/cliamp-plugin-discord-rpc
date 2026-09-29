@@ -1,5 +1,14 @@
 package statewatch_test
 
+// This file tests the Lua plugin by running it under a real interpreter, which
+// is why it skips where none is on PATH: Cliamp's own Lua is not to hand, so
+// the plugin runs under any interpreter that is. The text agreements in
+// transport_plugin_test.go exist for precisely that reason: they hold
+// everywhere, and these hold wherever the plugin can really be executed.
+//
+// The plugin is driven by testdata/plugin_driver.lua, which stands in for
+// Cliamp and records what the plugin published and wrote, in order.
+
 import (
 	"encoding/json"
 	"os"
@@ -12,11 +21,6 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
-
-// The plugin runs under Cliamp's own Lua, which is not to hand here, so these
-// run it under any interpreter that is. They are skipped where none is, which
-// is why the text agreements in transport_plugin_test.go exist as well: those
-// hold everywhere, and these hold wherever the plugin can really be executed.
 
 // luaRuntimes are tried in order, the versioned names first so a system that
 // has a real interpreter does not silently use whatever "lua" points at.
@@ -114,17 +118,18 @@ func inspectWritten(t *testing.T, body json.RawMessage) statewatch.Detail {
 	return detail
 }
 
-// The IPC transport is what shipped before the state file, and the daemon's
-// startup display depends on these snapshots being retained: a daemon started
-// mid-track has to be shown the track it missed.
+// An unconfigured plugin publishes over IPC, the transport that shipped before
+// the state file, writing no documents. It publishes one retained snapshot per
+// event — app.start, track.change, app.quit — and retention is what lets the
+// daemon's startup display show the track it missed. The heartbeat is the file
+// transport's alone: over IPC the daemon's own subscription is the liveness
+// signal.
 func TestPluginPublishesOverIPCWhenNothingIsConfigured(t *testing.T) {
 	records := runPlugin(t, "nil")
 
 	if writes := recordsOfKind(records, "write"); len(writes) != 0 {
 		t.Fatalf("an unconfigured plugin wrote %d documents; IPC is the default", len(writes))
 	}
-	// app.start, track.change, app.quit. The heartbeat is the file transport's
-	// alone: over IPC the daemon's own subscription is the liveness signal.
 	publishes := recordsOfKind(records, "publish")
 	if len(publishes) != 3 {
 		t.Fatalf("published %d snapshots, want one per event", len(publishes))
@@ -161,8 +166,17 @@ func TestPluginPublishesOverIPCWhenNothingIsConfigured(t *testing.T) {
 	}
 }
 
-// What the daemon reads in file mode, produced the way the plugin produces it:
-// app.start, a track change carrying one field, one heartbeat, and a quit.
+// A configured plugin writes the document the daemon reads, produced the way
+// the plugin produces it: app.start, a track change carrying one field, one
+// heartbeat, and a quit, so one document per event plus one for the heartbeat.
+//
+// The track change carries only the new title, so the fields it leaves out have
+// to come from the player; a document built only from the event would reach
+// Discord as a track with no artist and no position. The heartbeat must not
+// move updated_at, because the daemon interpolates the playhead from it and a
+// beat that moved the time would re-anchor the progress bar on a position that
+// had not moved — yet the beat still carries the whole track, because the
+// daemon reads the last document rather than remembering the earlier ones.
 func TestPluginWritesTheDocumentTheDaemonReads(t *testing.T) {
 	writes := recordsOfKind(runPlugin(t, "file"), "write")
 	if len(writes) != 4 {
@@ -177,9 +191,6 @@ func TestPluginWritesTheDocumentTheDaemonReads(t *testing.T) {
 		t.Errorf("plugin version = %q, want the release this repo pins, %q", started.State.PluginVersion, version.Number)
 	}
 
-	// The event carries the new title and nothing else, so the fields it leaves
-	// out have to come from the player. A document built only from the event
-	// would reach Discord as a track with no artist and no position.
 	changed := inspectWritten(t, writes[1].Body)
 	if changed.State.Title != "Second Track" {
 		t.Errorf("the document written on the track change = %+v", changed.State)
@@ -188,9 +199,6 @@ func TestPluginWritesTheDocumentTheDaemonReads(t *testing.T) {
 		t.Errorf("the track change dropped what the event left out: %+v", changed.State)
 	}
 
-	// The heartbeat's whole point is that it is not a change. The daemon
-	// interpolates the playhead from updated_at, so a beat that moved it would
-	// re-anchor the progress bar on a position that had not moved.
 	beat := inspectWritten(t, writes[2].Body)
 	if beat.State.ObservedAt != changed.State.ObservedAt {
 		t.Errorf("a heartbeat moved the change time from %d to %d", changed.State.ObservedAt, beat.State.ObservedAt)
@@ -198,8 +206,6 @@ func TestPluginWritesTheDocumentTheDaemonReads(t *testing.T) {
 	if beat.Age >= changed.Age {
 		t.Errorf("the heartbeat did not advance: %v then %v", changed.Age, beat.Age)
 	}
-	// And it still has to carry the whole track: the daemon reads the last
-	// document rather than remembering the earlier ones.
 	if beat.State.Title != changed.State.Title || beat.State.Position != changed.State.Position {
 		t.Errorf("the heartbeat wrote a partial document: %+v", beat.State)
 	}

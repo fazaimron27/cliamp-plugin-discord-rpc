@@ -2,6 +2,10 @@
 
 package discord
 
+// This file is the Linux half of peer verification: it reads the credentials the
+// kernel records for a connected socket and rejects a peer whose UID is not the
+// daemon's own.
+
 import (
 	"fmt"
 	"net"

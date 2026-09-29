@@ -105,11 +105,14 @@ it is a pin nothing checks.
 ## Comment convention
 
 Comments are written in one voice across the repository, and that voice is
-written down in the [comment convention](comments.md): the rules, the two
-exemptions the tree itself proves are needed, and the two parts deliberately
-left to review because no syntax tree can judge them. A guard test in
-`daemon/internal/style` enforces the mechanical ones, so it runs with the rest
-of the suite and a breach cannot land unnoticed.
+written down in the [comment convention](comments.md): every file opens with a
+comment saying what it is for, nothing is commented inside a function body, and
+the reasoning those bodies carried lives either in the doc comment of the
+declaration it explains or in the header of the file it governs. The document
+also lists the exemptions the tree itself proves are needed, and the parts
+deliberately left to review because no syntax tree can judge them. A guard test
+in `daemon/internal/style` enforces the mechanical ones, so it runs with the
+rest of the suite and a breach cannot land unnoticed.
 
 Both documents exist for the same reason as the release pins above: a rule
 nothing reads is a rule that drifts, and a comment convention with no guard is

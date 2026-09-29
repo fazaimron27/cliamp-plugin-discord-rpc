@@ -1,5 +1,11 @@
 package config_test
 
+// This file covers how the playback transport is chosen and recorded, where the
+// state path and its liveness window come from, and whether this daemon and the
+// Lua plugin end up reading the same source. The two helpers below isolate each
+// load from the ambient environment so a case can only be influenced by its own
+// input.
+
 import (
 	"os"
 	"path/filepath"
@@ -34,6 +40,9 @@ func transportConfig(t *testing.T, body string) string {
 	return path
 }
 
+// With nothing configured, the transport is IPC. The default must not change
+// what an existing install does: IPC is what every current user is already
+// running.
 func TestConfigTransportDefaultsToIPC(t *testing.T) {
 	transportHome(t)
 
@@ -41,13 +50,14 @@ func TestConfigTransportDefaultsToIPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The default must not change what an existing install does: IPC is what
-	// every current user is already running.
 	if cfg.Transport != config.TransportIPC {
 		t.Fatalf("transport = %q, want %q", cfg.Transport, config.TransportIPC)
 	}
 }
 
+// A transport key in the shared plugin section is read by the daemon. The
+// plugin reads this same key through p:config(), which is what keeps the two
+// halves from being configured separately.
 func TestConfigTransportReadsTheSharedPluginSection(t *testing.T) {
 	transportHome(t)
 	path := transportConfig(t, "transport = \"file\"\n")
@@ -56,13 +66,13 @@ func TestConfigTransportReadsTheSharedPluginSection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The plugin reads this same key through p:config(), which is what keeps the
-	// two halves from being configured separately.
 	if cfg.Transport != config.TransportFile {
 		t.Fatalf("transport = %q, want %q", cfg.Transport, config.TransportFile)
 	}
 }
 
+// A transport set in config.toml is overridden by the environment, which is in
+// turn overridden by the command line.
 func TestConfigTransportPrecedence(t *testing.T) {
 	transportHome(t)
 	path := transportConfig(t, "transport = \"file\"\n")
@@ -90,6 +100,9 @@ func TestConfigTransportPrecedence(t *testing.T) {
 	})
 }
 
+// A transport naming neither of the two known values is rejected, and the
+// error names it. The likeliest cause is a misspelling, and echoing the value
+// also exposes one that kept its quote characters from an inline comment.
 func TestConfigRejectsAnUnknownTransport(t *testing.T) {
 	transportHome(t)
 
@@ -97,9 +110,6 @@ func TestConfigRejectsAnUnknownTransport(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown transport was accepted")
 	}
-	// The message must name the offending value, because the likeliest cause is
-	// a misspelled one. Echoing it also exposes a value that kept its quote
-	// characters from an inline comment in config.toml.
 	for _, want := range []string{"carrier-pigeon", config.TransportIPC, config.TransportFile} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not name %q: %v", want, err)
@@ -107,6 +117,9 @@ func TestConfigRejectsAnUnknownTransport(t *testing.T) {
 	}
 }
 
+// With nothing configured, the state path is the legacy location. v1.4.0 wrote
+// there and the plugin still composes the same path from HOME, so the default
+// keeps a legacy install's existing file in play.
 func TestConfigStatePathDefaultsToTheLegacyLocation(t *testing.T) {
 	home := transportHome(t)
 
@@ -114,14 +127,18 @@ func TestConfigStatePathDefaultsToTheLegacyLocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// v1.4.0 wrote here and the plugin still composes the same path from HOME,
-	// so the default keeps a legacy install's existing file in play.
 	want := filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json")
 	if cfg.StatePath != want {
 		t.Fatalf("state path = %q, want %q", cfg.StatePath, want)
 	}
 }
 
+// state_path comes from config.toml when the file names it and otherwise from
+// the home default.
+//
+// There is no flag and no environment variable for it, unlike the transport: an
+// override this side could only be made where the plugin cannot see it, and the
+// daemon would watch a path nothing writes.
 func TestConfigStatePathComesFromTheFileOrTheDefault(t *testing.T) {
 	home := transportHome(t)
 
@@ -136,9 +153,6 @@ func TestConfigStatePathComesFromTheFileOrTheDefault(t *testing.T) {
 		}
 	})
 
-	// No flag and no environment variable, unlike the transport: an override
-	// this side could only be made where the plugin cannot see it, and the
-	// daemon would watch a path nothing writes.
 	t.Run("home default", func(t *testing.T) {
 		cfg, err := config.Load(nil)
 		if err != nil {
@@ -192,6 +206,12 @@ func TestConfigComparesAgainstThePluginsEffectiveValue(t *testing.T) {
 	})
 }
 
+// TransportWarning explains a transport the plugin cannot see and stays silent
+// when the halves agree.
+//
+// Naming all three is the point: what this daemon is reading, what the plugin
+// will read, and where each came from. A warning that names one side leaves the
+// user guessing which to change.
 func TestConfigTransportWarningNamesBothHalves(t *testing.T) {
 	transportHome(t)
 	path := transportConfig(t, "transport = \"file\"\n")
@@ -205,9 +225,6 @@ func TestConfigTransportWarningNamesBothHalves(t *testing.T) {
 		if warning == "" {
 			t.Fatal("no warning for a transport the plugin cannot see")
 		}
-		// Naming all three is the point: what this daemon is reading, what the
-		// plugin will read, and where each came from. A warning that names one
-		// side leaves the user guessing which to change.
 		for _, want := range []string{cfg.Transport, cfg.TransportSource, cfg.PluginTransport()} {
 			if !strings.Contains(warning, want) {
 				t.Errorf("warning does not name %q: %s", want, warning)
@@ -237,6 +254,10 @@ func TestConfigTransportWarningNamesBothHalves(t *testing.T) {
 // read config.toml through p:config(). So the halves agree unless this daemon
 // was overridden away from what the file says, which is what the provenance is
 // recorded for.
+//
+// TransportSource names the winning source. Restating the file's own value from
+// the environment or the command line changes nothing for the plugin, so it is
+// recorded without being a disagreement.
 func TestConfigRecordsWhereTheTransportCameFrom(t *testing.T) {
 	transportHome(t)
 	path := transportConfig(t, "transport = \"file\"\n")
@@ -284,8 +305,6 @@ func TestConfigRecordsWhereTheTransportCameFrom(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Restating the file's own value changes nothing for the plugin, so it
-		// must not warn.
 		if cfg.TransportDisagreesWithPlugin() {
 			t.Fatalf("source = %q, files = %q, chosen = %q", cfg.TransportSource, cfg.TransportFromFile, cfg.Transport)
 		}
@@ -302,6 +321,12 @@ func TestConfigRecordsWhereTheTransportCameFrom(t *testing.T) {
 	})
 }
 
+// With nothing configured, the max age is the legacy window, and the flag
+// replaces it.
+//
+// The plugin heartbeats every 15s, so v1.4.0's 45s window tolerates two missed
+// beats before activity is cleared. A zero window clears every document on
+// arrival, so the file transport could never report anything.
 func TestConfigMaxAgeDefaultsToTheLegacyWindow(t *testing.T) {
 	transportHome(t)
 
@@ -309,8 +334,6 @@ func TestConfigMaxAgeDefaultsToTheLegacyWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The plugin heartbeats every 15s, so v1.4.0's 45s window tolerates two
-	// missed beats before activity is cleared.
 	if cfg.StateMaxAge != 45*time.Second {
 		t.Fatalf("max age = %v, want 45s", cfg.StateMaxAge)
 	}
@@ -323,8 +346,6 @@ func TestConfigMaxAgeDefaultsToTheLegacyWindow(t *testing.T) {
 		t.Fatalf("max age = %v, want the command-line value", cfg.StateMaxAge)
 	}
 
-	// A zero window clears every document on arrival, so the file transport
-	// could never report anything.
 	if _, err := config.Load([]string{"--max-age", "0"}); err == nil {
 		t.Fatal("a zero max age was accepted")
 	}

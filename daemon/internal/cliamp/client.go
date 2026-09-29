@@ -1,6 +1,11 @@
 // Package cliamp subscribes to plugin events over Cliamp's local IPC socket.
 package cliamp
 
+// This file is the subscription half of the ipc transport: it completes
+// Cliamp's version 2 handshake, then streams playback snapshots for as long as
+// the socket stays open. The file transport's counterpart, which reads the state
+// document instead, is the statewatch package.
+
 import (
 	"bufio"
 	"context"
@@ -58,6 +63,15 @@ type event struct {
 
 // Subscribe connects to Cliamp and returns retained and live playback states.
 // The channel closes when Cliamp exits or the connection fails.
+//
+// The channel holds one snapshot and drops the oldest to make room, because
+// presence needs the newest complete snapshot rather than every intermediate
+// transition from a burst of Cliamp events.
+//
+// A frame that cannot be decoded, and a snapshot that fails validation, are each
+// logged and dropped rather than republished. Discord therefore keeps showing
+// the last good snapshot, and that log line is the only account of why presence
+// stopped tracking.
 func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, error) {
 	dialer := net.Dialer{Timeout: 3 * time.Second}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
@@ -126,9 +140,6 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, e
 			if message.Event != PlaybackTopic {
 				continue
 			}
-			// A rejected snapshot is dropped rather than republished, so it
-			// leaves Discord showing whatever the last good snapshot said. Say
-			// so: this is the only account of why presence stopped tracking.
 			var state playback.State
 			if err := json.Unmarshal(message.Data, &state); err != nil {
 				log.Printf("cliamp: discarding unreadable %s snapshot: %v", PlaybackTopic, err)
@@ -142,8 +153,6 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, e
 			select {
 			case states <- state:
 			default:
-				// Presence needs the newest complete snapshot, not every
-				// intermediate transition from a burst of Cliamp events.
 				select {
 				case <-states:
 				default:
