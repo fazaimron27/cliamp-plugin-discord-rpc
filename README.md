@@ -128,7 +128,7 @@ A successful startup looks like this:
 
 ```text
 $ cliamp-rpcd
-2026/08/14 15:29:59 starting cliamp-rpcd 1.9.0 (Cliamp IPC: /home/faza/.config/cliamp/cliamp.sock)
+2026/08/14 15:29:59 starting cliamp-rpcd 1.9.0 (Cliamp IPC: /home/user/.config/cliamp/cliamp.sock)
 2026/08/14 15:30:14 subscribed to Cliamp playback events
 2026/08/14 15:30:18 connected to Discord at /run/user/1000/discord-ipc-0
 ```
@@ -201,7 +201,7 @@ in their own section, and every one of them is optional:
 transport = "ipc"      # ipc (default) or file
 # lastfm_api_key = ""  # a Last.fm key enables album artwork
 # app_id = ""          # your own Discord application ID
-# state_path = "/home/you/.local/share/cliamp/rpc-state.json"   # file transport only
+# state_path = "/home/user/.local/share/cliamp/rpc-state.json"   # file transport only
 ```
 
 Restart Cliamp after changing any of them. The sections below cover each key.
@@ -277,11 +277,11 @@ what it found:
 cliamp-rpcd 1.9.0
 
 transport ok    ipc, from the default
-cliamp    ok    subscribed to plugin.discord-rpc.playback at /home/faza/.config/cliamp/cliamp.sock
+cliamp    ok    subscribed to plugin.discord-rpc.playback at /home/user/.config/cliamp/cliamp.sock
 plugin    ok    plugin v1.9.0 matches daemon v1.9.0
 discord   fail  Discord IPC unavailable: dial unix /run/user/1000/discord-ipc-0: connect: no such file or directory
 last.fm   ok    the API key was accepted
-config    ok    /home/faza/.config/cliamp/config.toml
+config    ok    /home/user/.config/cliamp/config.toml
 ```
 
 The line above is the Discord-absent case, which the first entry below covers.
@@ -349,7 +349,7 @@ loop cannot: why a document that exists is not being used.
 
 ```text
 transport ok    file, from the config file
-cliamp    fail  no state document at /home/you/.local/share/cliamp/rpc-state.json, so Cliamp is not running or the plugin is not writing one
+cliamp    fail  no state document at /home/user/.local/share/cliamp/rpc-state.json, so Cliamp is not running or the plugin is not writing one
 ```
 
 - **No document.** Cliamp has not run since `transport = "file"` was added, or
