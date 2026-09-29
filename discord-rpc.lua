@@ -11,7 +11,7 @@
 -- Single source of truth for this plugin's release. The manifest and every
 -- published snapshot must agree, and cliamp-rpcd warns when its own release
 -- line differs from the value published here.
-local VERSION = "1.9.1"
+local VERSION = "1.9.2"
 
 -- The transport used when config.toml names none. cliamp-rpcd defaults to the
 -- same value, which is what lets it tell a deliberate override apart from a
