@@ -1,5 +1,10 @@
 /cliamp-rpcd
+/dist/
 
+# A release binary carries git's view of the tree at the moment it was built,
+# and release.yml writes the amd64 archive into dist/ before it builds arm64.
+# Left untracked, that archive made every arm64 release claim a dirty tree.
+#
 # Design specs and plans are working notes for the change in progress, not part
 # of the shipped tree. They are written under docs/superpowers/ by the spec-driven
 # workflow and must not be committed.
