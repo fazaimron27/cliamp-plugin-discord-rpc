@@ -42,25 +42,32 @@ type Resolver struct {
 	LastFM *LastFM
 }
 
-// Resolve merges the sources for one track.
+// Resolve merges the sources for one track, reporting the merged answer through
+// report rather than returning it.
 //
-// Last.fm's error is returned alongside the merged answer rather than instead
+// It reports rather than returns so that an answer the merge can give without a
+// request can be published before a source that costs one. Every call carries a
+// merged answer rather than one source's own contribution, so the per-field
+// precedence above holds for each of them and no call can shadow the pages.
+//
+// Last.fm's error is reported alongside the merged answer rather than instead
 // of it, because the two are about different things: the pages depend on
 // Last.fm and the image does not, so a transient failure costs the links rather
 // than the artwork. The caller reports the error and publishes what it was
 // given.
-func (r Resolver) Resolve(ctx context.Context, request Request) (TrackInfo, error) {
+func (r Resolver) Resolve(ctx context.Context, request Request, report func(TrackInfo, error)) {
 	lastfm, err := r.LastFM.Resolve(ctx, request.Artist, request.Title)
 	merged := TrackInfo{Image: lastfm.Image, TrackURL: lastfm.TrackURL, ArtistURL: lastfm.ArtistURL}
 
 	if derived, ok := r.derived(request.Path); ok {
 		merged.Image = derived
-		return merged, err
+		report(merged, err)
+		return
 	}
 	if image := r.playerImage(ctx, request); image != "" {
 		merged.Image = image
 	}
-	return merged, err
+	report(merged, err)
 }
 
 // derived reports the thumbnail the playback path identifies, if any.

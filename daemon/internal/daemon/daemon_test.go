@@ -109,8 +109,20 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 
 type noArtwork struct{}
 
-func (noArtwork) Resolve(context.Context, artwork.Request) (artwork.TrackInfo, error) {
-	return artwork.TrackInfo{}, nil
+func (noArtwork) Resolve(_ context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
+	report(artwork.TrackInfo{}, nil)
+}
+
+// resolveFully runs a staged resolve to completion and returns the answer it
+// finished on, which is what a test asserting the merged result cares about.
+// A test that cares about the staging itself collects every report instead.
+func resolveFully(ctx context.Context, resolver artworkResolver, request artwork.Request) (artwork.TrackInfo, error) {
+	var info artwork.TrackInfo
+	var err error
+	resolver.Resolve(ctx, request, func(reported artwork.TrackInfo, reportedErr error) {
+		info, err = reported, reportedErr
+	})
+	return info, err
 }
 
 // serveCliampEvent performs the v2 handshake and publishes one snapshot carrying
@@ -489,16 +501,16 @@ func newGatedArtwork() *gatedArtwork {
 	return &gatedArtwork{entered: make(chan struct{}, 8), release: make(chan string, 8)}
 }
 
-func (g *gatedArtwork) Resolve(ctx context.Context, _ artwork.Request) (artwork.TrackInfo, error) {
+func (g *gatedArtwork) Resolve(ctx context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
 	select {
 	case g.entered <- struct{}{}:
 	default:
 	}
 	select {
 	case image := <-g.release:
-		return artwork.TrackInfo{Image: image}, nil
+		report(artwork.TrackInfo{Image: image}, nil)
 	case <-ctx.Done():
-		return artwork.TrackInfo{}, ctx.Err()
+		report(artwork.TrackInfo{}, ctx.Err())
 	}
 }
 
@@ -536,11 +548,11 @@ type countingArtwork struct {
 	image    string
 }
 
-func (c *countingArtwork) Resolve(context.Context, artwork.Request) (artwork.TrackInfo, error) {
+func (c *countingArtwork) Resolve(_ context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.requests++
-	return artwork.TrackInfo{Image: c.image}, nil
+	report(artwork.TrackInfo{Image: c.image}, nil)
 }
 
 func (c *countingArtwork) count() int {
@@ -762,7 +774,7 @@ func TestRepublishKeyCoversTheDerivedLinks(t *testing.T) {
 // the one that fails if production forgets to supply it at all.
 func TestNewResolverDerivesTheThumbnailForAVideoPath(t *testing.T) {
 	resolver := newResolver(config.Config{})
-	info, err := resolver.Resolve(context.Background(), artwork.Request{
+	info, err := resolveFully(context.Background(), resolver, artwork.Request{
 		Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
 	})
 	if err != nil {
@@ -798,7 +810,7 @@ func TestNewResolverAsksThePlayerOverTheConfiguredSocket(t *testing.T) {
 	}()
 
 	resolver := newResolver(config.Config{CliampSocket: socket})
-	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
+	info, err := resolveFully(context.Background(), resolver, artwork.Request{Path: "spotify:track:abc"})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}

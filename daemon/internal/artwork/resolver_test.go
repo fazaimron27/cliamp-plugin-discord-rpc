@@ -38,6 +38,18 @@ func (c *countingSource) Resolve(context.Context, artwork.Request) (artwork.Trac
 	return c.info, c.err
 }
 
+// finalAnswer runs a staged resolve to completion and returns the answer it
+// finished on, which is what a test asserting the merged result cares about.
+// A test that cares about the staging itself collects every report instead.
+func finalAnswer(ctx context.Context, resolver artwork.Resolver, request artwork.Request) (artwork.TrackInfo, error) {
+	var info artwork.TrackInfo
+	var err error
+	resolver.Resolve(ctx, request, func(reported artwork.TrackInfo, reportedErr error) {
+		info, err = reported, reportedErr
+	})
+	return info, err
+}
+
 // TestResolverAlwaysTakesThePagesFromLastFM pins the merge's whole reason for
 // existing. The pages exist in no other source, so they must reach the answer
 // whatever supplied the image.
@@ -45,7 +57,7 @@ func TestResolverAlwaysTakesThePagesFromLastFM(t *testing.T) {
 	resolver := artwork.Resolver{
 		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"}}}`),
 	}
-	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
+	info, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -62,7 +74,7 @@ func TestResolverAlwaysTakesThePagesFromLastFM(t *testing.T) {
 // daemon running with no API key relies on.
 func TestResolverWithoutASourceIsEmpty(t *testing.T) {
 	resolver := artwork.Resolver{LastFM: artwork.NewLastFM("")}
-	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "/music/song.flac", Artist: "A", Title: "T"})
+	info, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "/music/song.flac", Artist: "A", Title: "T"})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -83,7 +95,7 @@ func TestResolverPrefersTheDerivedThumbnail(t *testing.T) {
 		},
 		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","album":{"image":[{"#text":"https://img/lastfm.jpg"}]}}}`),
 	}
-	info, err := resolver.Resolve(context.Background(), artwork.Request{
+	info, err := finalAnswer(context.Background(), resolver, artwork.Request{
 		Path:   "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
 		Artist: "A",
 		Title:  "T",
@@ -103,16 +115,16 @@ func TestResolverDerivedTierDoesNotMoveTheLinks(t *testing.T) {
 	body := `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"},"album":{"image":[{"#text":"https://img/lastfm.jpg"}]}}}`
 	request := artwork.Request{Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", Artist: "A", Title: "T"}
 
-	without, err := artwork.Resolver{LastFM: lastFMReturning(t, body)}.Resolve(context.Background(), request)
+	without, err := finalAnswer(context.Background(), artwork.Resolver{LastFM: lastFMReturning(t, body)}, request)
 	if err != nil {
 		t.Fatalf("Resolve() without a derived source error = %v", err)
 	}
-	with, err := artwork.Resolver{
+	with, err := finalAnswer(context.Background(), artwork.Resolver{
 		Derived: func(string) (string, bool) {
 			return "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg", true
 		},
 		LastFM: lastFMReturning(t, body),
-	}.Resolve(context.Background(), request)
+	}, request)
 	if err != nil {
 		t.Fatalf("Resolve() with a derived source error = %v", err)
 	}
@@ -135,7 +147,7 @@ func TestResolverDerivedTierShortCircuitsThePlayer(t *testing.T) {
 		Player: player,
 		LastFM: artwork.NewLastFM(""),
 	}
-	if _, err := resolver.Resolve(context.Background(), artwork.Request{Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}); err != nil {
+	if _, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}); err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	if player.calls != 0 {
@@ -157,7 +169,7 @@ func TestResolverPlayerImageDoesNotShadowTheLinks(t *testing.T) {
 		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
 		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"}}}`),
 	}
-	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
+	info, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -189,7 +201,7 @@ func TestResolverPlayerImageSurvivesALastFMFailure(t *testing.T) {
 		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
 		LastFM: lastfm,
 	}
-	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
+	info, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
 	if err == nil {
 		t.Fatal("Resolve() error = nil; want the Last.fm failure reported")
 	}
@@ -209,7 +221,7 @@ func TestResolverIsUngatedByTheAPIKey(t *testing.T) {
 		},
 		LastFM: artwork.NewLastFM(""),
 	}
-	info, err := derived.Resolve(context.Background(), request)
+	info, err := finalAnswer(context.Background(), derived, request)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -221,7 +233,7 @@ func TestResolverIsUngatedByTheAPIKey(t *testing.T) {
 		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
 		LastFM: artwork.NewLastFM(""),
 	}
-	info, err = player.Resolve(context.Background(), request)
+	info, err = finalAnswer(context.Background(), player, request)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
