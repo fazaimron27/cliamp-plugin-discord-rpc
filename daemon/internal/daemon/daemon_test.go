@@ -109,7 +109,7 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 
 type noArtwork struct{}
 
-func (noArtwork) Resolve(context.Context, string, string) (artwork.TrackInfo, error) {
+func (noArtwork) Resolve(context.Context, artwork.Request) (artwork.TrackInfo, error) {
 	return artwork.TrackInfo{}, nil
 }
 
@@ -489,7 +489,7 @@ func newGatedArtwork() *gatedArtwork {
 	return &gatedArtwork{entered: make(chan struct{}, 8), release: make(chan string, 8)}
 }
 
-func (g *gatedArtwork) Resolve(ctx context.Context, _, _ string) (artwork.TrackInfo, error) {
+func (g *gatedArtwork) Resolve(ctx context.Context, _ artwork.Request) (artwork.TrackInfo, error) {
 	select {
 	case g.entered <- struct{}{}:
 	default:
@@ -536,7 +536,7 @@ type countingArtwork struct {
 	image    string
 }
 
-func (c *countingArtwork) Resolve(context.Context, string, string) (artwork.TrackInfo, error) {
+func (c *countingArtwork) Resolve(context.Context, artwork.Request) (artwork.TrackInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.requests++

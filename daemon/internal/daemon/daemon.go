@@ -105,8 +105,13 @@ type discordClient interface {
 	Close() error
 }
 
+// artworkResolver supplies the artwork, the track page and the artist page for
+// one track. The request is a struct rather than three positional strings
+// because the path is not something Last.fm can be asked about: it is what the
+// sources that cost nothing key on, and naming it keeps a caller from reading
+// it as a stray argument at the call site.
 type artworkResolver interface {
-	Resolve(context.Context, string, string) (artwork.TrackInfo, error)
+	Resolve(context.Context, artwork.Request) (artwork.TrackInfo, error)
 }
 
 // artworkResult is a lookup's outcome, tagged with the track it was asked about
@@ -210,7 +215,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cfg.LastFMAPIKey == "" {
 		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
-	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.NewLastFM(cfg.LastFMAPIKey), time.Now, presenceRefresh)
+	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.Resolver{
+		LastFM: artwork.NewLastFM(cfg.LastFMAPIKey),
+	}, time.Now, presenceRefresh)
 }
 
 // run is the daemon's event loop. refresh is a parameter rather than the
@@ -260,9 +267,9 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	var artworkTrack string
 	var artworkInfo artwork.TrackInfo
 
-	requestArtwork := func(track, artist, title string) {
+	requestArtwork := func(track string, request artwork.Request) {
 		go func() {
-			info, err := resolver.Resolve(ctx, artist, title)
+			info, err := resolver.Resolve(ctx, request)
 			select {
 			case resolved <- artworkResult{track: track, info: info, err: err}:
 			case <-ctx.Done():
@@ -322,7 +329,11 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		if track != artworkTrack {
 			artworkTrack = track
 			artworkInfo = artwork.TrackInfo{}
-			requestArtwork(track, lastState.Artist, lastState.Title)
+			requestArtwork(track, artwork.Request{
+				Path:   lastState.Path,
+				Artist: lastState.Artist,
+				Title:  lastState.Title,
+			})
 		}
 		info := artworkInfo
 		links := linksFor(lastState, info)
@@ -399,7 +410,11 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			reconcile()
 		case <-refreshTimer.C:
 			if artworkInfo.Image == "" && lastState.IsPlaying() {
-				requestArtwork(artworkTrack, lastState.Artist, lastState.Title)
+				requestArtwork(artworkTrack, artwork.Request{
+					Path:   lastState.Path,
+					Artist: lastState.Artist,
+					Title:  lastState.Title,
+				})
 			}
 			reconcile()
 		}
