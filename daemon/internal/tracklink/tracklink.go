@@ -187,8 +187,12 @@ func isASCIIAlphanumeric(character rune) bool {
 }
 
 // artistSearchRoutes maps a provider to its artist search page. The key is the
-// same name Find puts on a Link, so the two cannot drift apart without the
-// route test failing.
+// same name Find puts on a Link, so renaming or removing a route fails the
+// artist search test, which drives Find and then ArtistSearch.
+//
+// The other direction is unguarded: a provider added to Find with no route
+// here would publish a provider track link beside a Last.fm artist link, and
+// no test would fail. Add the route with the provider.
 var artistSearchRoutes = map[string]func(string) string{
 	spotifyName: func(name string) string {
 		return "https://open.spotify.com/search/" + url.PathEscape(name)
