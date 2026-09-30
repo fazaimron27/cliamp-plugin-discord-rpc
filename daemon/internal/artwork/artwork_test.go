@@ -32,22 +32,22 @@ func TestLastFMArtworkResolutionAndCache(t *testing.T) {
 	defer server.Close()
 
 	resolver := artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
-	image, err := resolver.Resolve(context.Background(), "Artist", "Track")
-	if err != nil || image != "https://img/large.jpg" {
-		t.Fatalf("Resolve() = %q, %v", image, err)
+	info, err := resolver.Resolve(context.Background(), "Artist", "Track")
+	if err != nil || info.Image != "https://img/large.jpg" {
+		t.Fatalf("Resolve() = %+v, %v", info, err)
 	}
-	image, err = resolver.Resolve(context.Background(), "Artist", "Track")
-	if err != nil || image != "https://img/large.jpg" || requests != 1 {
-		t.Fatalf("cached Resolve() = %q, %v; requests = %d", image, err, requests)
+	info, err = resolver.Resolve(context.Background(), "Artist", "Track")
+	if err != nil || info.Image != "https://img/large.jpg" || requests != 1 {
+		t.Fatalf("cached Resolve() = %+v, %v; requests = %d", info, err, requests)
 	}
 }
 
 // A resolver built with no API key returns no artwork and no error, so the
 // daemon can run without Last.fm configured.
 func TestLastFMArtworkDisabledWithoutKey(t *testing.T) {
-	image, err := artwork.NewLastFM("").Resolve(context.Background(), "Artist", "Track")
-	if err != nil || image != "" {
-		t.Fatalf("Resolve() = %q, %v", image, err)
+	info, err := artwork.NewLastFM("").Resolve(context.Background(), "Artist", "Track")
+	if err != nil || info.Image != "" {
+		t.Fatalf("Resolve() = %+v, %v", info, err)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestLastFMFailuresHaveRetryBackoff(t *testing.T) {
 	if _, err := resolver.Resolve(context.Background(), "Artist", "Track"); err == nil {
 		t.Fatal("expected initial error")
 	}
-	if image, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || image != "" {
-		t.Fatalf("backoff result = %q, %v", image, err)
+	if info, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || info.Image != "" {
+		t.Fatalf("backoff result = %+v, %v", info, err)
 	}
 	if transport.requests != 1 {
 		t.Fatalf("requests during backoff = %d", transport.requests)
@@ -236,20 +236,20 @@ func TestLastFMEmptyResultIsRetriedLikeAFailure(t *testing.T) {
 		artwork.WithClock(func() time.Time { return now }),
 	)
 
-	if image, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || image != "" {
-		t.Fatalf("first Resolve() = %q, %v", image, err)
+	if info, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || info.Image != "" {
+		t.Fatalf("first Resolve() = %+v, %v", info, err)
 	}
-	if image, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || image != "" {
-		t.Fatalf("Resolve() inside the window = %q, %v", image, err)
+	if info, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil || info.Image != "" {
+		t.Fatalf("Resolve() inside the window = %+v, %v", info, err)
 	}
 	if requests != 1 {
 		t.Fatalf("requests inside the window = %d, want 1", requests)
 	}
 
 	now = now.Add(time.Minute)
-	image, err := resolver.Resolve(context.Background(), "Artist", "Track")
-	if err != nil || image != "https://img/large.jpg" {
-		t.Fatalf("Resolve() after the window = %q, %v; the empty result was never retried", image, err)
+	info, err := resolver.Resolve(context.Background(), "Artist", "Track")
+	if err != nil || info.Image != "https://img/large.jpg" {
+		t.Fatalf("Resolve() after the window = %+v, %v; the empty result was never retried", info, err)
 	}
 }
 
@@ -276,11 +276,131 @@ func TestLastFMResolvedArtworkOutlivesTheRetryWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Minute)
-	image, err := resolver.Resolve(context.Background(), "Artist", "Track")
-	if err != nil || image != "https://img/large.jpg" {
-		t.Fatalf("Resolve() = %q, %v", image, err)
+	info, err := resolver.Resolve(context.Background(), "Artist", "Track")
+	if err != nil || info.Image != "https://img/large.jpg" {
+		t.Fatalf("Resolve() = %+v, %v", info, err)
 	}
 	if requests != 1 {
 		t.Fatalf("requests = %d, want 1: resolved artwork was refetched inside its lifetime", requests)
+	}
+}
+
+// The track and artist pages ride along with the artwork. Last.fm reports all
+// three in the one track.getInfo response the resolver was already making, so
+// reading the two pages costs no request the image did not already make.
+func TestLastFMResolveReturnsTheTrackAndArtistPages(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"track":{"url":"https://www.last.fm/music/Artist/_/Track","artist":{"url":"https://www.last.fm/music/Artist"},"album":{"image":[{"#text":"https://img/large.jpg"}]}}}`))
+	}))
+	defer server.Close()
+
+	resolver := artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
+	info, err := resolver.Resolve(context.Background(), "Artist", "Track")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Image != "https://img/large.jpg" {
+		t.Errorf("Image = %q; want the artwork", info.Image)
+	}
+	if info.TrackURL != "https://www.last.fm/music/Artist/_/Track" {
+		t.Errorf("TrackURL = %q; want the track page", info.TrackURL)
+	}
+	if info.ArtistURL != "https://www.last.fm/music/Artist" {
+		t.Errorf("ArtistURL = %q; want the artist page", info.ArtistURL)
+	}
+	if requests != 1 {
+		t.Errorf("requests = %d, want 1: the pages must cost no extra request", requests)
+	}
+}
+
+// The cache entry carries the pages, not just the image. Serving them on a miss
+// alone would show the links on a track's first play and then drop them for the
+// rest of the hour — invisible in a short manual test, which is what makes this
+// the subtlest way for the change to be wrong. The second lookup here is served
+// from the cache and must still report the pages.
+func TestLastFMResolveServesThePagesFromTheCache(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"track":{"url":"https://www.last.fm/music/Artist/_/Track","artist":{"url":"https://www.last.fm/music/Artist"},"album":{"image":[{"#text":"https://img/large.jpg"}]}}}`))
+	}))
+	defer server.Close()
+
+	resolver := artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
+	if _, err := resolver.Resolve(context.Background(), "Artist", "Track"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := resolver.Resolve(context.Background(), "Artist", "Track")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1: the second lookup should have been cached", requests)
+	}
+	if info.TrackURL != "https://www.last.fm/music/Artist/_/Track" {
+		t.Errorf("cached TrackURL = %q; want the track page", info.TrackURL)
+	}
+	if info.ArtistURL != "https://www.last.fm/music/Artist" {
+		t.Errorf("cached ArtistURL = %q; want the artist page", info.ArtistURL)
+	}
+}
+
+// A page the resolver cannot vouch for is dropped and the ones it can are kept.
+// Discord rejects the entire activity when one field is a malformed URL, so a
+// bad page must not be able to cost the card its image or its other link.
+//
+// The two cases are the discriminator, not a check that nothing is returned: an
+// http page and a page that is not a URL at all must each be dropped while the
+// valid page beside them survives. Asserting only that bad values are absent
+// would also pass if the resolver returned no pages at all.
+func TestLastFMResolveKeepsAPageItCanVouchForAndDropsTheOthers(t *testing.T) {
+	cases := []struct {
+		name       string
+		track      string
+		artist     string
+		wantTrack  string
+		wantArtist string
+	}{
+		{
+			name:       "an http track page is dropped while the artist page survives",
+			track:      "http://www.last.fm/music/Artist/_/Track",
+			artist:     "https://www.last.fm/music/Artist",
+			wantTrack:  "",
+			wantArtist: "https://www.last.fm/music/Artist",
+		},
+		{
+			name:       "a malformed artist page is dropped while the track page survives",
+			track:      "https://www.last.fm/music/Artist/_/Track",
+			artist:     "not a url",
+			wantTrack:  "https://www.last.fm/music/Artist/_/Track",
+			wantArtist: "",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"track":{"url":"` + testCase.track +
+					`","artist":{"url":"` + testCase.artist +
+					`"},"album":{"image":[{"#text":"https://img/large.jpg"}]}}}`))
+			}))
+			defer server.Close()
+
+			resolver := artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
+			info, err := resolver.Resolve(context.Background(), "Artist", "Track")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Image != "https://img/large.jpg" {
+				t.Errorf("Image = %q; the artwork must survive a rejected page", info.Image)
+			}
+			if info.TrackURL != testCase.wantTrack {
+				t.Errorf("TrackURL = %q; want %q", info.TrackURL, testCase.wantTrack)
+			}
+			if info.ArtistURL != testCase.wantArtist {
+				t.Errorf("ArtistURL = %q; want %q", info.ArtistURL, testCase.wantArtist)
+			}
+		})
 	}
 }
