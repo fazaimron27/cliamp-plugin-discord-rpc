@@ -2,13 +2,13 @@
 // page, and where the provider publishes one, the artwork.
 package tracklink
 
-// This file holds the two mechanisms that turn a provider's path into a public
-// URL, and it holds nothing else: no network, no cache, no dependency beyond
-// the standard library. That is deliberate. Every value it is handed comes from
-// a provider or from a player, so the whole package is a refusal machine first
-// and a translator second — a path that matches nothing here is published
-// nowhere, which is what keeps a local filename and a credential-bearing
-// stream URL out of a Discord payload.
+// This file holds the three mechanisms that turn a provider's path into a
+// public URL, and it holds nothing else: no network, no cache, no dependency
+// beyond the standard library. That is deliberate. Every value it is handed
+// comes from a provider or from a player, so the whole package is a refusal
+// machine first and a translator second — a path that matches nothing here is
+// published nowhere, which is what keeps a local filename and a
+// credential-bearing stream URL out of a Discord payload.
 //
 // The three mechanisms are different in kind, and each one guarantees less
 // than the one before it:
@@ -22,9 +22,9 @@ package tracklink
 //     from, because the path slug is the identity, so the path is republished
 //     after its host, its segment count and its segments are checked.
 //
-// Both are allowlists. A blocklist would fail open the moment a provider is
-// added or a rule is missed, and five of Cliamp's providers already put a live
-// credential in the path.
+// All three are allowlists. A blocklist would fail open the moment a provider
+// is added or a rule is missed, and five of Cliamp's providers already put a
+// live credential in the path.
 
 import (
 	"fmt"
@@ -173,9 +173,10 @@ func isNumericID(id string) bool {
 	return true
 }
 
-// fromVideoURL handles the pass-through mechanism. The URL is rebuilt from the
-// video id rather than reused, so a watch URL carrying list=, index= or t= is
-// narrowed to the video and the host that is published is one we constructed.
+// fromVideoURL handles the URL rebuild mechanism for video paths. The URL is
+// rebuilt from the video id rather than reused, so a watch URL carrying list=,
+// index= or t= is narrowed to the video and the host that is published is one
+// we constructed.
 func fromVideoURL(path string) (Link, bool) {
 	name, canonicalHost, id, ok := videoPath(path)
 	if !ok {

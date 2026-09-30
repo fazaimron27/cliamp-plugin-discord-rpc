@@ -236,7 +236,8 @@ which needs no key. So without one, a local track still offers a working search
 button and a clickable artist, while a Spotify, YouTube or SoundCloud track is
 linked in full — its page, its artist, and its button all point at that
 service. A Tidal, Yandex Music, NetEase or Mixcloud track keeps its page and
-its button, and leaves the artist to Last.fm's exact page.
+its button, and leaves the artist to Last.fm — its exact artist page when a key
+resolves one, and the search otherwise.
 
 ### Use a custom Discord application
 

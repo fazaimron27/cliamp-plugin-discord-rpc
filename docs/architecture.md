@@ -329,7 +329,7 @@ in the pipeline: providers do not hand one to a plugin, and `ProviderMeta` never
 crosses that boundary. So the artist links to the provider's own artist search
 for that name when the path identified one **and that provider has a confirmed
 search route** — four of the eight do not, and for those the artist falls
-through to the exact Last.fm page — otherwise to the exact artist page when
+through to the tiers below — otherwise to the exact artist page when
 Last.fm supplies one, otherwise to Last.fm's search — which makes the artist
 linkable in more cases than the track is, since the last two tiers need neither
 a key nor an id.
