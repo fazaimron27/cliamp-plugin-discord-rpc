@@ -28,8 +28,10 @@ type Source interface {
 // of Derived, Player and LastFM that has one, and the pages always from LastFM.
 type Resolver struct {
 	// Derived is the path-derived source, a pure function of the playback path
-	// with no I/O, consulted before anything that costs a request. A nil value
-	// contributes nothing, which is what an unconfigured daemon wants.
+	// with no I/O. It is consulted before the player, whose answer costs a round
+	// trip; Last.fm is still asked first, because its answer is the only source
+	// of the pages. A nil value contributes nothing, which is what an
+	// unconfigured daemon wants.
 	Derived func(string) (string, bool)
 	// Player is the artwork the player reports for the track itself. Its answer
 	// costs a round trip, so Derived short-circuits it. A nil value contributes
