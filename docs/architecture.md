@@ -257,9 +257,17 @@ request: each URL is either already in the payload or a string parse of it.
 
 The track link is the provider's own page when the playback path identifies one,
 otherwise the Last.fm page from the same lookup that supplied the artwork,
-otherwise nothing — the title is not linked to a search page. The button falls
-back one step further, to the Last.fm search that works with no key configured,
-and is dropped entirely for a stream that resolves to nothing.
+otherwise nothing — the title is not linked to a search page. The title and the
+artwork share this link, so the artwork is clickable whether the image above it
+is the track's own art or the fallback asset: keying that on "is there album
+art" would leave the artwork inert for everyone without a Last.fm key, and on
+every track Last.fm has no image for.
+
+The button falls back one step further, to the Last.fm search, and is dropped
+only when there is no artist and title to search for. It is not withheld from a
+stream: whatever is playing has a name, the search works from a name alone, and
+withholding it made the same stream show a different card depending on whether a
+Last.fm key happened to be configured.
 
 `internal/tracklink` owns the path-to-URL mapping, and both of its mechanisms
 are allowlists. A `spotify:track:` URI is translated into a public page after

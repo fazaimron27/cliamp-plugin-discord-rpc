@@ -105,10 +105,15 @@ func buttons(s playback.State, links Links) []Button {
 //
 // Search stays as the last tier on purpose. It is the only one that works with
 // neither a key nor a recognised path, so dropping it would leave anyone
-// without a Last.fm key with no track button at all. The stream check sits here
-// rather than around the whole function because a derived provider link is
-// exactly what a stream can supply and a search cannot: YouTube is flagged as a
-// stream because it plays through yt-dlp, and its path is a stable video id.
+// without a Last.fm key with no track button at all.
+//
+// There is deliberately no stream check. There used to be one, and it made the
+// button depend on whether a Last.fm key was configured: a stream reached the
+// Last.fm page tier whenever a key supplied a page, and only fell through to
+// the guard when it did not. Whatever is playing has a name, a name is all the
+// search tier needs, and YouTube — flagged as a stream because it plays through
+// yt-dlp — is a case where linking is plainly right. So the button is offered
+// to a stream on the same terms as to anything else.
 func trackTarget(s playback.State, links Links) (string, string) {
 	if links.ProviderURL != "" {
 		return links.ProviderURL, links.Provider
@@ -118,7 +123,7 @@ func trackTarget(s playback.State, links Links) (string, string) {
 	}
 	artist := strings.TrimSpace(s.Artist)
 	title := strings.TrimSpace(s.Title)
-	if s.Stream || artist == "" || title == "" {
+	if artist == "" || title == "" {
 		return "", ""
 	}
 	query := url.Values{}
@@ -219,7 +224,7 @@ func Build(s playback.State, options Options, artworkURL string, links Links, no
 		if s.Album != "" {
 			text = s.Album
 		}
-		activity.Assets = &Assets{LargeImage: options.LargeImage, LargeText: truncate(text, maxFieldBytes)}
+		activity.Assets = &Assets{LargeImage: options.LargeImage, LargeText: truncate(text, maxFieldBytes), LargeURL: track}
 	}
 
 	if s.Status == "playing" && s.Duration > 0 {

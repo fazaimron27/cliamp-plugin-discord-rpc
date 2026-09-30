@@ -47,14 +47,14 @@ func TestPresenceTrackButtonEncodesSearchQuery(t *testing.T) {
 	}
 }
 
-// A stream, an absent or blank artist, and an absent title each leave no stable
-// track to link, so the card carries only the app button.
+// An absent or blank artist and an absent title each leave no search to build,
+// so the card carries only the app button. A stream is no longer in this list:
+// whatever is playing has a name, and a name is enough for the search tier.
 func TestPresenceOmitsTrackButtonWhenNotLinkable(t *testing.T) {
 	cases := []struct {
 		name  string
 		state playback.State
 	}{
-		{"stream", playback.State{Status: "playing", Title: "Track", Artist: "Artist", Stream: true}},
 		{"empty artist", playback.State{Status: "playing", Title: "Track"}},
 		{"blank artist", playback.State{Status: "playing", Title: "Track", Artist: "   "}},
 		{"empty title", playback.State{Status: "playing", Artist: "Artist"}},
@@ -263,7 +263,47 @@ func TestPresenceLinksAStreamWhenThePathIdentifiesTheTrack(t *testing.T) {
 	}
 }
 
-// An absent link is left out of the payload rather than sent as an empty URL.
+// The stream guard covers the search tier only, so whether a stream gets a
+// track button must not depend on the unrelated question of whether a Last.fm
+// key is configured. Whatever is playing has a name, and the search works from
+// a name alone — so a stream gets the button with no key exactly as it does
+// with one, and the card reads the same either way.
+func TestPresenceLinksAKeylessStreamToASearch(t *testing.T) {
+	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Stream: true}
+	activity := presence.Build(state, presence.Options{}, "", presence.Links{}, time.Unix(1000, 0))
+
+	if len(activity.Buttons) != 2 {
+		t.Fatalf("buttons = %+v; want a track button beside the app one", activity.Buttons)
+	}
+	if activity.Buttons[0].Label != "View on Last.fm" || activity.Buttons[0].URL != "https://www.last.fm/search?q=Artist+Track" {
+		t.Errorf("buttons[0] = %+v; want the Last.fm search", activity.Buttons[0])
+	}
+}
+
+// The artwork links to the track page whenever one is known, whether the image
+// beside it is the track's own art or the fallback asset. The rule that decides
+// this cannot be "is there album art": with no Last.fm key there never is, which
+// would leave the artwork inert on a Spotify track whose page the daemon knows
+// and on every track Last.fm has no image for.
+func TestPresenceLinksTheArtworkEvenWithoutAlbumArt(t *testing.T) {
+	state := playback.State{
+		Status: "playing", Title: "Track", Artist: "Artist", Album: "Album",
+		Path: "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+	}
+	links := presence.Links{
+		Provider:    "Spotify",
+		ProviderURL: "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
+	}
+	activity := presence.Build(state, presence.Options{LargeImage: "cliamp"}, "", links, time.Unix(1000, 0))
+
+	if activity.Assets == nil || activity.Assets.LargeImage != "cliamp" {
+		t.Fatalf("assets = %+v; want the fallback asset", activity.Assets)
+	}
+	if activity.Assets.LargeURL != links.ProviderURL {
+		t.Errorf("assets.LargeURL = %q; want %q", activity.Assets.LargeURL, links.ProviderURL)
+	}
+}
+
 // Discord validates these fields for URI syntax alone and rejects the whole
 // activity when one is malformed, so a field with nothing to point at has to be
 // omitted rather than blanked.
