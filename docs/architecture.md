@@ -187,7 +187,7 @@ cliamp-plugin-discord-rpc/
   and public presence keys.
 - `daemon/internal/presence` builds typed Discord Listening activities.
 - `daemon/internal/artwork` merges a track's artwork from the playback path, the
-  player and Last.fm, and caches the Last.fm half.
+  player and Last.fm, reporting the merge in stages and caching the Last.fm half.
 - `daemon/internal/tracklink` maps a playback path to the public page it belongs
   to. It holds no network and no dependency beyond the standard library, because
   every value it is handed comes from a provider or a player: it is a refusal
@@ -255,10 +255,21 @@ falls back to the Discord application asset configured by `--large-image`.
 
 Lookups run on their own goroutine, and the loop publishes a Listening activity
 as soon as it knows the track — with artwork when the answer is already in hand,
-and again when a lookup that was still open returns one. The loop is the only
-thing that talks to Discord, so a request it waited on would queue every pause,
-stop, and track change behind Last.fm for up to the client's four-second
-timeout.
+and again whenever a lookup reports a new one. The loop is the only thing that
+talks to Discord, so a request it waited on would queue every pause, stop, and
+track change behind Last.fm for up to the client's four-second timeout.
+
+A lookup therefore reports in stages rather than once at the end, because its
+sources do not cost the same. A playback path the derived source can read is
+reported before Last.fm is asked, so the card carries the thumbnail without
+waiting on a request that, on those paths, changes nothing the card renders:
+the provider link outranks both Last.fm pages. Every report is a complete merged
+answer rather than one source's contribution, so the per-field precedence holds
+between them and no report can shadow the pages. A path no free source answers
+is reported exactly once, at the end — there is nothing to publish before then,
+and the player is consulted after Last.fm so that a socket nobody is listening
+on charges its timeout to the tracks that need Last.fm anyway rather than to
+every track.
 
 The community-maintained default Discord application ID is used unless a custom
 ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or

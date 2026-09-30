@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
@@ -242,5 +243,80 @@ func TestResolverIsUngatedByTheAPIKey(t *testing.T) {
 	}
 	if info.TrackURL != "" || info.ArtistURL != "" {
 		t.Errorf("a keyless resolver produced links: %+v", info)
+	}
+}
+
+// TestResolverReportsTheDerivedThumbnailBeforeAskingLastFM pins why the report
+// is staged rather than returned once. The derived thumbnail is a parse of the
+// playback path and nothing else, so it is known before the request is made —
+// and on the paths that supply one, the card does not render Last.fm's answer
+// at all, because the provider link outranks both Last.fm pages. So a merge
+// that returned only when Last.fm answered held a free answer behind a request
+// that changed nothing, which is the fallback asset showing for as long as the
+// round trip takes.
+//
+// The server records how many reports had happened when it was asked, which is
+// the only place the order of the two is observable.
+func TestResolverReportsTheDerivedThumbnailBeforeAskingLastFM(t *testing.T) {
+	var mu sync.Mutex
+	var reports []artwork.TrackInfo
+	reportsWhenAsked := -1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reportsWhenAsked = len(reports)
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	const thumbnail = "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
+	resolver := artwork.Resolver{
+		Derived: func(string) (string, bool) { return thumbnail, true },
+		LastFM:  artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client())),
+	}
+	resolver.Resolve(context.Background(), artwork.Request{
+		Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", Artist: "A", Title: "T",
+	}, func(info artwork.TrackInfo, _ error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, info)
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if reportsWhenAsked != 1 {
+		t.Errorf("Last.fm was asked after %d reports; want the thumbnail reported before the request, so 1", reportsWhenAsked)
+	}
+	if len(reports) != 2 {
+		t.Fatalf("Resolve() reported %d times; want the thumbnail first and the merge second", len(reports))
+	}
+	if reports[0].Image != thumbnail || reports[0].TrackURL != "" {
+		t.Errorf("first report = %+v; want the thumbnail with no pages yet", reports[0])
+	}
+	if reports[1].Image != thumbnail || reports[1].TrackURL != "https://www.last.fm/music/A/_/T" {
+		t.Errorf("last report = %+v; want the thumbnail and both pages", reports[1])
+	}
+}
+
+// TestResolverReportsOnceWhenNoSourceIsFree pins the other half of the staging
+// rule. A path no free source answers has nothing to publish early, so it is
+// reported once: two reports there would put a second activity on the wire
+// carrying the card the first one already sent.
+//
+// The player deliberately stays behind Last.fm rather than moving ahead of it.
+// It is consulted for every path, and a daemon whose socket is wedged holds it
+// for its whole timeout, so asking it first would delay every track's artwork
+// by that timeout to save a round trip on the paths that have one.
+func TestResolverReportsOnceWhenNoSourceIsFree(t *testing.T) {
+	reports := 0
+	resolver := artwork.Resolver{
+		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"}}}`),
+	}
+	resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"}, func(artwork.TrackInfo, error) {
+		reports++
+	})
+	if reports != 1 {
+		t.Errorf("Resolve() reported %d times for a path no free source answers; want 1", reports)
 	}
 }

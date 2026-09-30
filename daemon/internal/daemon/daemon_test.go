@@ -526,6 +526,25 @@ func (g *gatedArtwork) awaitLookup(t *testing.T) {
 	}
 }
 
+// stagedArtwork reports the answer that needed no request at once, then holds
+// the rest of the merge until the test releases it. It is what makes the
+// staging observable from the loop: nothing but the first report ever carries
+// the free image, so an activity showing it can only have been published while
+// the resolver was still blocked.
+type stagedArtwork struct {
+	free    artwork.TrackInfo
+	release chan artwork.TrackInfo
+}
+
+func (s *stagedArtwork) Resolve(ctx context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
+	report(s.free, nil)
+	select {
+	case rest := <-s.release:
+		report(rest, nil)
+	case <-ctx.Done():
+	}
+}
+
 // startDaemon runs the loop against a session and a resolver, and returns the
 // Discord fake it publishes to. Production passes presenceRefresh; a test that
 // needs the loop's timer to fire sooner passes its own interval.
@@ -630,6 +649,50 @@ func TestRunRepublishesPresenceWhenTheArtworkArrives(t *testing.T) {
 	waitFor(t, "the artwork to reach Discord", func() bool {
 		for _, activity := range client.snapshot() {
 			if activity.Assets != nil && activity.Assets.LargeImage == image {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A thumbnail derived from the playback path costs no request, so the card can
+// carry it while the lookup for the pages is still open — which is the point of
+// reporting the merge in stages. Before that, the resolver spoke once, when
+// Last.fm had answered, and the fallback asset stayed on the card for the whole
+// round trip.
+//
+// The loop needed no change for this: it republishes on every answer it is
+// handed and discards the ones for a track it has left. This test is what holds
+// that property down, since the resolver is a stub here and the staging it
+// exercises belongs to the real one.
+func TestRunPublishesTheDerivedThumbnailWhileTheLookupIsOpen(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	const (
+		thumbnail = "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
+		trackURL  = "https://www.last.fm/music/Artist/_/Track"
+	)
+	lookup := &stagedArtwork{
+		free:    artwork.TrackInfo{Image: thumbnail},
+		release: make(chan artwork.TrackInfo, 1),
+	}
+	client := startDaemon(t, socket, lookup, presenceRefresh)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the thumbnail to reach Discord", func() bool {
+		for _, activity := range client.snapshot() {
+			if activity.Assets != nil && activity.Assets.LargeImage == thumbnail {
+				return true
+			}
+		}
+		return false
+	})
+
+	lookup.release <- artwork.TrackInfo{Image: thumbnail, TrackURL: trackURL}
+	waitFor(t, "the pages to reach Discord", func() bool {
+		for _, activity := range client.snapshot() {
+			if activity.DetailsURL == trackURL {
 				return true
 			}
 		}

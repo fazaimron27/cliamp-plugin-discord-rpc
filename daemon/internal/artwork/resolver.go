@@ -43,12 +43,24 @@ type Resolver struct {
 }
 
 // Resolve merges the sources for one track, reporting the merged answer through
-// report rather than returning it.
+// report as it becomes known rather than only once it is complete.
 //
-// It reports rather than returns so that an answer the merge can give without a
-// request can be published before a source that costs one. Every call carries a
-// merged answer rather than one source's own contribution, so the per-field
-// precedence above holds for each of them and no call can shadow the pages.
+// report is called once, and twice when the playback path answers: a path the
+// derived source can read is reported before Last.fm is asked, and reported
+// again when the pages arrive. That first report is the whole reason the seam
+// exists. The thumbnail is a parse of the path and costs no request, while the
+// paths that supply one are exactly the paths whose card renders the provider
+// link in place of both Last.fm pages, so waiting for Last.fm would hold a free
+// answer behind a request whose response that card does not use.
+//
+// Every call carries a complete merged answer rather than one source's own
+// contribution, so the per-field precedence above holds for each of them and no
+// report can shadow the pages. A path the derived source does not answer is
+// reported once, at the end, because there is nothing to publish before then.
+// The player stays behind Last.fm for the same reason: it is consulted for
+// every path, and a socket nobody is listening on costs its timeout, so moving
+// it first would charge that timeout to every track to save a round trip on the
+// ones that get an image.
 //
 // Last.fm's error is reported alongside the merged answer rather than instead
 // of it, because the two are about different things: the pages depend on
@@ -56,14 +68,16 @@ type Resolver struct {
 // than the artwork. The caller reports the error and publishes what it was
 // given.
 func (r Resolver) Resolve(ctx context.Context, request Request, report func(TrackInfo, error)) {
+	if image, ok := r.derived(request.Path); ok {
+		report(TrackInfo{Image: image}, nil)
+		lastfm, err := r.LastFM.Resolve(ctx, request.Artist, request.Title)
+		report(TrackInfo{Image: image, TrackURL: lastfm.TrackURL, ArtistURL: lastfm.ArtistURL}, err)
+		return
+	}
+
 	lastfm, err := r.LastFM.Resolve(ctx, request.Artist, request.Title)
 	merged := TrackInfo{Image: lastfm.Image, TrackURL: lastfm.TrackURL, ArtistURL: lastfm.ArtistURL}
 
-	if derived, ok := r.derived(request.Path); ok {
-		merged.Image = derived
-		report(merged, err)
-		return
-	}
 	if image := r.playerImage(ctx, request); image != "" {
 		merged.Image = image
 	}
