@@ -176,7 +176,9 @@ cliamp-plugin-discord-rpc/
   two overrides that can do it; they exist for troubleshooting rather than
   configuration, and a daemon running under one warns at startup.
 - `daemon/internal/cliamp` subscribes to retained and live plugin events over
-  Cliamp's owner-only Unix socket.
+  Cliamp's owner-only Unix socket. It also issues one `state.get` request per
+  track over a short-lived connection of its own, for the artwork Cliamp holds
+  but does not publish to plugins.
 - `daemon/internal/statewatch` reads and watches the state document. It presents
   the same interface as the subscription — a channel of playback snapshots — so
   the run loop does not branch on the transport, and it owns the document's
@@ -184,7 +186,8 @@ cliamp-plugin-discord-rpc/
 - `daemon/internal/playback` validates snapshots and derives private identity
   and public presence keys.
 - `daemon/internal/presence` builds typed Discord Listening activities.
-- `daemon/internal/artwork` resolves and caches album images from Last.fm.
+- `daemon/internal/artwork` merges a track's artwork from the playback path, the
+  player and Last.fm, and caches the Last.fm half.
 - `daemon/internal/tracklink` maps a playback path to the public page it belongs
   to. It holds no network and no dependency beyond the standard library, because
   every value it is handed comes from a provider or a player: it is a refusal
@@ -216,17 +219,39 @@ what stops that document from holding the card indefinitely.
 
 ## Artwork
 
-The daemon calls Last.fm `track.getInfo` with artist and title and selects the
-largest valid HTTPS image. The same response carries the track's own page and
-its artist's page, which the resolver returns alongside the image: reading them
+The card's image is the first of three sources that has one, and they are tried
+in the order of what they cost. The cheapest is derived from the playback path:
+a YouTube video's id names a thumbnail on a host that publishes one, so the
+image arrives with no request at all. Next is the artwork Cliamp itself holds
+for the track, read over the `state.get` IPC request. Last is Last.fm's
+`track.getInfo`, which selects the largest valid HTTPS image it reports.
+
+The two cheaper sources are gated by their own rules rather than trusted. The
+`state.get` answer is used only when the path it describes is the track being
+reported — the player answers from live state, so an answer can describe a
+track it has already left — and only when the URL's host is one of the two on
+the allowlist: `i.scdn.co` for Spotify and `thumbnailer.mixcloud.com` for
+Mixcloud. It is an allowlist rather than a blocklist because a blocklist fails
+open the moment a provider is added. The consequence is deliberate: podcast
+artwork, whose host is whatever the publisher's feed points at, and local
+artwork, which is a `file://` URL, are refused and those tracks fall back to
+Last.fm. Anything added to the list is a host whose URLs are public by
+construction.
+
+The track's own page and its artist's page come from Last.fm and nowhere else,
+whatever supplied the image. The merge is per field rather than per source for
+exactly that reason: a source that won the image and answered with its own
+result whole would drop both pages, which would cost Spotify and Mixcloud their
+exact track and artist links the moment they gained artwork.
+
+Last.fm's response carries the two pages alongside the image, so reading them
 costs no request the artwork did not already make. What a lookup found is
 remembered with an expiry: an entry naming an image is reused for an hour, while
 an answer carrying no image is retried after 30 seconds. A track's artwork does
 not change while it plays, but whether Last.fm could supply it can, so a
 transient miss outlives nothing and the resolver does not accumulate a lookup
-for every track the daemon has ever seen. A missing API key, failed lookup, or
-absent image falls back to the Discord application asset configured by
-`--large-image`.
+for every track the daemon has ever seen. When every source misses, the image
+falls back to the Discord application asset configured by `--large-image`.
 
 Lookups run on their own goroutine, and the loop publishes a Listening activity
 as soon as it knows the track — with artwork when the answer is already in hand,
@@ -241,12 +266,13 @@ ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
 
 Last.fm is consulted only when a `lastfm_api_key` is supplied, and the resolver
 returns before any request when it is absent, so a keyless daemon makes no
-lookup at all. That withholds both the artwork and the exact track and artist
-pages, since one response carries all three. The pages are never constructed
-from the artist and title instead: Last.fm's own slug rules fold case and
-rewrite punctuation, so a built URL is correct for most tracks and quietly wrong
-for the rest, which is the failure `internal/tracklink` exists to refuse. The
-card falls back to a Last.fm search, which needs no key.
+Last.fm lookup at all. Neither of the two cheaper sources consults the key, so a
+keyless card still gains both of them; what it loses is the exact track and
+artist pages, and an image for any track whose artwork only Last.fm has. The
+pages are never constructed from the artist and title instead: Last.fm's own
+slug rules fold case and rewrite punctuation, so a built URL is correct for most
+tracks and quietly wrong for the rest, which is the failure `internal/tracklink`
+exists to refuse. The card falls back to a Last.fm search, which needs no key.
 
 ## Card Links
 
@@ -262,6 +288,9 @@ artwork share this link, so the artwork is clickable whether the image above it
 is the track's own art or the fallback asset: keying that on "is there album
 art" would leave the artwork inert for everyone without a Last.fm key, and on
 every track Last.fm has no image for.
+
+The artwork's *image* has a precedence of its own, which is not this ladder and
+is not the same lookup any more — see § Artwork.
 
 The button falls back one step further, to the Last.fm search, and is dropped
 only when there is no artist and title to search for. It is not withheld from a
