@@ -2,24 +2,29 @@
 // page, and where the provider publishes one, the artwork.
 package tracklink
 
-// This file holds the two mechanisms that turn a provider's path into a public
-// URL, and it holds nothing else: no network, no cache, no dependency beyond
-// the standard library. That is deliberate. Every value it is handed comes from
-// a provider or from a player, so the whole package is a refusal machine first
-// and a translator second — a path that matches nothing here is published
-// nowhere, which is what keeps a local filename and a credential-bearing
-// stream URL out of a Discord payload.
+// This file holds the three mechanisms that turn a provider's path into a
+// public URL, and it holds nothing else: no network, no cache, no dependency
+// beyond the standard library. That is deliberate. Every value it is handed
+// comes from a provider or from a player, so the whole package is a refusal
+// machine first and a translator second — a path that matches nothing here is
+// published nowhere, which is what keeps a local filename and a
+// credential-bearing stream URL out of a Discord payload.
 //
-// The two mechanisms are different in kind:
+// The three mechanisms are different in kind, and each one guarantees less
+// than the one before it:
 //
-//   - URI translation: a spotify:track:<id> URI has no public form of its own,
-//     so it is translated into one.
-//   - URL pass-through: a YouTube watch URL is already public, so it is
-//     published only after its host is checked and its identity rebuilt.
+//   - URI translation: a spotify:track:<id> or tidal://track/<id> URI has no
+//     public form of its own, so it is translated into one.
+//   - URL rebuild: a YouTube watch URL or a NetEase page URL is already
+//     public, so it is published only after its host is checked and its
+//     identity rebuilt from the id.
+//   - Page pass-through: a SoundCloud or Mixcloud page has no id to rebuild
+//     from, because the path slug is the identity, so the path is republished
+//     after its host, its segment count and its segments are checked.
 //
-// Both are allowlists. A blocklist would fail open the moment a provider is
-// added or a rule is missed, and five of Cliamp's providers already put a live
-// credential in the path.
+// All three are allowlists. A blocklist would fail open the moment a provider
+// is added or a rule is missed, and five of Cliamp's providers already put a
+// live credential in the path.
 
 import (
 	"fmt"
@@ -31,13 +36,23 @@ const (
 	spotifyName      = "Spotify"
 	youtubeName      = "YouTube"
 	youtubeMusicName = "YouTube Music"
+	tidalName        = "Tidal"
+	yandexName       = "Yandex Music"
+	neteaseName      = "NetEase"
+	soundcloudName   = "SoundCloud"
+	mixcloudName     = "Mixcloud"
 
 	spotifyTrackPrefix   = "spotify:track:"
 	spotifyEpisodePrefix = "spotify:episode:"
+	tidalTrackPrefix     = "tidal://track/"
+	yandexTrackPrefix    = "yandex:track:"
 
 	youtubeHost      = "youtube.com"
 	youtubeMusicHost = "music.youtube.com"
 	youtuBeHost      = "youtu.be"
+	neteaseHost      = "music.163.com"
+	soundcloudHost   = "soundcloud.com"
+	mixcloudHost     = "mixcloud.com"
 
 	// videoIDLength is the only length a YouTube video id has. Requiring it is
 	// what makes "v=short" a refusal rather than a published link.
@@ -50,6 +65,13 @@ const (
 	// 4:3 canvas with the frame letterboxed inside it. mqdefault is the one
 	// that both always exists and is clean 16:9.
 	youtubeThumbnail = "https://i.ytimg.com/vi/%s/mqdefault.jpg"
+
+	// neteaseSongRoute is the one fragment route that addresses a song. The
+	// album and djradio routes share the host and the id parameter, so the
+	// route is checked rather than the parameter alone.
+	neteaseSongRoute = "/song"
+
+	neteasePage = "https://music.163.com/song?id=%s"
 )
 
 // Link is a provider track's public identity: where it lives, and what to call
@@ -68,34 +90,53 @@ func Find(path string) (Link, bool) {
 	if path == "" {
 		return Link{}, false
 	}
-	if link, ok := fromSpotifyURI(path); ok {
+	if link, ok := fromURIPrefix(path); ok {
 		return link, true
 	}
 	if link, ok := fromVideoURL(path); ok {
 		return link, true
 	}
+	if link, ok := fromNeteaseURL(path); ok {
+		return link, true
+	}
+	if link, ok := fromPageURL(path); ok {
+		return link, true
+	}
 	return Link{}, false
 }
 
-// fromSpotifyURI translates a Spotify URI into its public page. The id is
-// charset-checked before it is placed in the URL, which is what keeps a path
-// traversal or a query string from being carried through.
-func fromSpotifyURI(path string) (Link, bool) {
-	candidates := []struct{ prefix, kind string }{
-		{spotifyTrackPrefix, "track"},
-		{spotifyEpisodePrefix, "episode"},
-	}
-	for _, candidate := range candidates {
-		id, found := strings.CutPrefix(path, candidate.prefix)
+// uriTranslations is the translation mechanism's allowlist: the opaque prefix
+// a provider hands over, the provider it belongs to, the page it is translated
+// into, and the check its id has to pass. A prefix that matches and an id that
+// fails is a refusal rather than a reason to try the next entry, which is what
+// keeps spotify:track:abc?x=1 from reaching a looser row below it.
+var uriTranslations = []struct {
+	prefix   string
+	provider string
+	page     string
+	validID  func(string) bool
+}{
+	{spotifyTrackPrefix, spotifyName, "https://open.spotify.com/track/%s", isSpotifyID},
+	{spotifyEpisodePrefix, spotifyName, "https://open.spotify.com/episode/%s", isSpotifyID},
+	{tidalTrackPrefix, tidalName, "https://tidal.com/browse/track/%s", isNumericID},
+	{yandexTrackPrefix, yandexName, "https://music.yandex.ru/track/%s", isNumericID},
+}
+
+// fromURIPrefix translates a provider URI into its public page. The id is
+// checked before it is placed in the URL, which is what keeps a path traversal
+// or a query string from being carried through.
+func fromURIPrefix(path string) (Link, bool) {
+	for _, translation := range uriTranslations {
+		id, found := strings.CutPrefix(path, translation.prefix)
 		if !found {
 			continue
 		}
-		if !isSpotifyID(id) {
+		if !translation.validID(id) {
 			return Link{}, false
 		}
 		return Link{
-			Provider: spotifyName,
-			URL:      "https://open.spotify.com/" + candidate.kind + "/" + id,
+			Provider: translation.provider,
+			URL:      fmt.Sprintf(translation.page, id),
 		}, true
 	}
 	return Link{}, false
@@ -116,9 +157,26 @@ func isSpotifyID(id string) bool {
 	return true
 }
 
-// fromVideoURL handles the pass-through mechanism. The URL is rebuilt from the
-// video id rather than reused, so a watch URL carrying list=, index= or t= is
-// narrowed to the video and the host that is published is one we constructed.
+// isNumericID reports whether id is a bare Tidal or Yandex identifier, which
+// are decimal. It is also what refuses the ":albumId" suffix a Yandex path can
+// carry: client.plainID strips that from *like* ids and toPlaylistTracks never
+// applies it, so a colon can reach the path, and a colon is not a digit.
+func isNumericID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, character := range id {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// fromVideoURL handles the URL rebuild mechanism for video paths. The URL is
+// rebuilt from the video id rather than reused, so a watch URL carrying list=,
+// index= or t= is narrowed to the video and the host that is published is one
+// we constructed.
 func fromVideoURL(path string) (Link, bool) {
 	name, canonicalHost, id, ok := videoPath(path)
 	if !ok {
@@ -155,6 +213,166 @@ func videoPath(path string) (name, canonicalHost, id string, ok bool) {
 		return "", "", "", false
 	}
 	return name, canonicalHost, id, true
+}
+
+// fromNeteaseURL handles the rebuild mechanism for NetEase. The published URL
+// is constructed from the validated id rather than reused, so the fragment
+// route, a parameter beside the id, and the host itself cannot ride along.
+func fromNeteaseURL(path string) (Link, bool) {
+	parsed, err := url.Parse(path)
+	if err != nil || parsed.Scheme != "https" {
+		return Link{}, false
+	}
+	if normaliseHost(parsed.Hostname()) != neteaseHost {
+		return Link{}, false
+	}
+	id, ok := neteaseID(parsed)
+	if !ok {
+		return Link{}, false
+	}
+	return Link{Provider: neteaseName, URL: fmt.Sprintf(neteasePage, id)}, true
+}
+
+// neteaseID reads the song id from either form: the "#/song?id=<id>" fragment
+// cliamp builds, and the plain "?id=<id>" that the site accepts and that
+// survives a client which mangles fragments. A fragment addressing anything
+// else is refused rather than read, and so is an id-free path on another
+// route, because publishing a song page for an album's id is exactly the
+// wrong-page failure this package exists to refuse.
+func neteaseID(parsed *url.URL) (string, bool) {
+	if parsed.Fragment != "" {
+		route, err := url.Parse(parsed.Fragment)
+		if err != nil || route.Path != neteaseSongRoute {
+			return "", false
+		}
+		return neteaseSongID(route.Query().Get("id"))
+	}
+	if parsed.Path != "" && parsed.Path != "/" && parsed.Path != neteaseSongRoute {
+		return "", false
+	}
+	return neteaseSongID(parsed.Query().Get("id"))
+}
+
+// neteaseSongID reports the id if it is one, and the empty string otherwise.
+func neteaseSongID(id string) (string, bool) {
+	if !isNumericID(id) {
+		return "", false
+	}
+	return id, true
+}
+
+// pageProviders is the pass-through mechanism's allowlist: the hosts whose
+// page URL is itself the track's identity, the name and canonical host to
+// publish, and the path segments that are one of the provider's own tabs or
+// namespaces rather than a track. A segment count alone does not draw that
+// line — soundcloud.com/<user>/tracks is a profile tab and is two segments
+// too — so the reserved words do, which is how yt-dlp draws it as well.
+var pageProviders = []struct {
+	host           string
+	provider       string
+	canonicalHost  string
+	reservedFirst  []string
+	reservedSecond []string
+}{
+	{
+		host:          soundcloudHost,
+		provider:      soundcloudName,
+		canonicalHost: soundcloudHost,
+		reservedFirst: []string{"stations"},
+		reservedSecond: []string{
+			"tracks", "albums", "sets", "reposts", "likes", "spotlight",
+			"comments",
+		},
+	},
+	{
+		host:          mixcloudHost,
+		provider:      mixcloudName,
+		canonicalHost: "www." + mixcloudHost,
+		reservedSecond: []string{
+			"stream", "uploads", "favorites", "listens", "playlists",
+		},
+	},
+}
+
+// fromPageURL handles the pass-through mechanism. The published URL is built
+// from the two validated segments rather than from the raw path, so a query, a
+// fragment, a percent-encoding and a credential in the authority all have
+// nowhere to sit. What it cannot construct is the segments themselves, which
+// the provider chose — that is the whole of why this mechanism guarantees less
+// than the two above it.
+func fromPageURL(path string) (Link, bool) {
+	parsed, err := url.Parse(path)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+		return Link{}, false
+	}
+	host := normaliseHost(parsed.Hostname())
+	for _, provider := range pageProviders {
+		if provider.host != host {
+			continue
+		}
+		first, second, ok := pageSegments(parsed)
+		if !ok {
+			return Link{}, false
+		}
+		if containsString(provider.reservedFirst, first) {
+			return Link{}, false
+		}
+		if containsString(provider.reservedSecond, second) {
+			return Link{}, false
+		}
+		return Link{
+			Provider: provider.provider,
+			URL: "https://" + provider.canonicalHost + "/" + first +
+				"/" + second,
+		}, true
+	}
+	return Link{}, false
+}
+
+// pageSegments splits a page path into the two segments that identify a track.
+// Exactly two is the rule, and it is what refuses a SoundCloud set —
+// soundcloud.com/<user>/sets/<slug> — which the reserved-word check alone
+// would not catch.
+func pageSegments(parsed *url.URL) (first, second string, ok bool) {
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) != 2 {
+		return "", "", false
+	}
+	if !isSlug(segments[0]) || !isSlug(segments[1]) {
+		return "", "", false
+	}
+	return segments[0], segments[1], true
+}
+
+// isSlug reports whether segment is a bare path identifier. The charset is
+// narrower than either provider's own, because this mechanism republishes a
+// string the provider chose and the accept-list is therefore the whole
+// guarantee. Path is the decoded path, so holding to a bare charset is also
+// what refuses an escape: %20 would arrive as a space, and %2F as a separator.
+// A dot is outside the charset, which is what keeps ".." out with it.
+func isSlug(segment string) bool {
+	if segment == "" {
+		return false
+	}
+	for _, character := range segment {
+		if isASCIIAlphanumeric(character) {
+			continue
+		}
+		if character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// containsString reports whether values holds wanted.
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // Artwork returns the public thumbnail for a video path, and false for every
@@ -238,6 +456,9 @@ var artistSearchRoutes = map[string]func(string) string{
 	},
 	youtubeMusicName: func(name string) string {
 		return "https://music.youtube.com/search?q=" + url.QueryEscape(name)
+	},
+	soundcloudName: func(name string) string {
+		return "https://soundcloud.com/search?q=" + url.QueryEscape(name)
 	},
 }
 

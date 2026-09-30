@@ -309,22 +309,30 @@ stream: whatever is playing has a name, the search works from a name alone, and
 withholding it made the same stream show a different card depending on whether a
 Last.fm key happened to be configured.
 
-`internal/tracklink` owns the path-to-URL mapping, and both of its mechanisms
-are allowlists. A `spotify:track:` URI is translated into a public page after
-its id is charset-checked. A YouTube watch URL is checked against a host
-allowlist and then **rebuilt from the video id**, so `list=`, `index=` and `t=`
-cannot ride along and the host that is published is one this daemon
-constructed. A path matching neither is published nowhere, which is what keeps a
-local filename and the credential-bearing stream URLs of the five self-hosted
-providers off the card.
+`internal/tracklink` owns the path-to-URL mapping, and all three of its
+mechanisms are allowlists. A `spotify:track:` or `tidal://track/` URI is
+translated into a public page after its id is charset-checked — the opaque form
+is the provider's own, so the page has to be constructed. A YouTube watch URL
+and a NetEase page URL are checked against a host allowlist and then **rebuilt
+from the id**, so `list=`, `index=` and `t=` cannot ride along, a `#/song`
+fragment cannot survive, and the host that is published is one this daemon
+constructed. A SoundCloud or Mixcloud page has no id to rebuild from, because
+the path slug *is* the identity; those two are the one case that republishes a
+path the provider chose, after a host allowlist, an exact segment count and a
+reserved-word check, and with the query and fragment dropped. Each mechanism
+guarantees less than the one before it. A path matching none of them is
+published nowhere, which is what keeps a local filename and the
+credential-bearing stream URLs of the five self-hosted providers off the card.
 
 The artist follows a different precedence, because no artist id exists anywhere
 in the pipeline: providers do not hand one to a plugin, and `ProviderMeta` never
 crosses that boundary. So the artist links to the provider's own artist search
-for that name when the path identified one, otherwise to the exact artist page
-when Last.fm supplies one, otherwise to Last.fm's search — which makes the
-artist linkable in more cases than the track is, since the last two tiers need
-neither a key nor an id.
+for that name when the path identified one **and that provider has a confirmed
+search route** — four of the eight do not, and for those the artist falls
+through to the tiers below — otherwise to the exact artist page when
+Last.fm supplies one, otherwise to Last.fm's search — which makes the artist
+linkable in more cases than the track is, since the last two tiers need neither
+a key nor an id.
 
 The provider search outranks the exact page deliberately. A provider link means
 the listener is playing from that service, and the artist should not point

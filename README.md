@@ -233,8 +233,44 @@ The key does two things, and the card works without it:
 
 Where a link cannot be resolved, the card falls back to a Last.fm **search**,
 which needs no key. So without one, a local track still offers a working search
-button and a clickable artist, while a Spotify or YouTube track is linked in
-full — its page, its artist, and its button all point at that service.
+button and a clickable artist, while a Spotify, YouTube or SoundCloud track is
+linked in full — its page, its artist, and its button all point at that
+service. A Tidal, Yandex Music, NetEase or Mixcloud track keeps its page and
+its button, and leaves the artist to Last.fm — its exact artist page when a key
+resolves one, and the search otherwise.
+
+Every provider Cliamp supports, and what the card does with it:
+
+| Provider | Artwork | Track link | Artist link |
+| --- | --- | --- | --- |
+| Spotify | from Cliamp | provider page | provider search |
+| YouTube | video thumbnail | provider page | provider search |
+| YouTube Music | video thumbnail | provider page | provider search |
+| SoundCloud | Last.fm | provider page | provider search |
+| Tidal | Last.fm | provider page | Last.fm |
+| Yandex Music | Last.fm | provider page | Last.fm |
+| NetEase | Last.fm | provider page | Last.fm |
+| Mixcloud | from Cliamp | provider page | Last.fm |
+| Local | Last.fm | — | Last.fm |
+| Podcasts | Last.fm | — | Last.fm |
+| Radio | Last.fm | — | Last.fm |
+| Navidrome | Last.fm | — | Last.fm |
+| Lyrion | Last.fm | — | Last.fm |
+| Plex | Last.fm | — | Last.fm |
+| Jellyfin | Last.fm | — | Last.fm |
+| Emby | Last.fm | — | Last.fm |
+| Audiobookshelf | Last.fm | — | Last.fm |
+| Qobuz | Last.fm | — | Last.fm |
+
+`from Cliamp` is the artwork Cliamp holds for the track, and `video thumbnail`
+is derived from the video id; neither needs a key. Every other image comes from
+Last.fm when the key is set, and from the community-maintained static asset
+when it is not. In a link column, `Last.fm` is the exact page with a key and the
+search without one, and a dash means that provider's path is published nowhere
+at all: a local file has no public page, a podcast episode and a radio stream
+have no stable identity, and the self-hosted servers and Qobuz resolve their
+streams through URLs that carry a live credential. `Radio` covers Cliamp's
+built-in channels as well as your own stations.
 
 ### Use a custom Discord application
 
