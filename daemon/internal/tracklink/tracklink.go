@@ -1,4 +1,5 @@
-// Package tracklink maps a playback path to the public page it belongs to.
+// Package tracklink maps a playback path to the public URLs it belongs to: the
+// page, and where the provider publishes one, the artwork.
 package tracklink
 
 // This file holds the two mechanisms that turn a provider's path into a public
@@ -21,6 +22,7 @@ package tracklink
 // credential in the path.
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 )
@@ -40,6 +42,14 @@ const (
 	// videoIDLength is the only length a YouTube video id has. Requiring it is
 	// what makes "v=short" a refusal rather than a published link.
 	videoIDLength = 11
+
+	// youtubeThumbnail is the one thumbnail host and variant this package
+	// publishes. maxresdefault is the better image and 404s for any video with
+	// no HD source, which would leave the card with no image at all rather than
+	// falling through to the asset below it; hqdefault always exists but is a
+	// 4:3 canvas with the frame letterboxed inside it. mqdefault is the one
+	// that both always exists and is clean 16:9.
+	youtubeThumbnail = "https://i.ytimg.com/vi/%s/mqdefault.jpg"
 )
 
 // Link is a provider track's public identity: where it lives, and what to call
@@ -110,23 +120,7 @@ func isSpotifyID(id string) bool {
 // video id rather than reused, so a watch URL carrying list=, index= or t= is
 // narrowed to the video and the host that is published is one we constructed.
 func fromVideoURL(path string) (Link, bool) {
-	parsed, err := url.Parse(path)
-	if err != nil || parsed.Scheme != "https" {
-		return Link{}, false
-	}
-	host := normaliseHost(parsed.Hostname())
-
-	name, canonicalHost := "", ""
-	switch host {
-	case youtubeMusicHost:
-		name, canonicalHost = youtubeMusicName, youtubeMusicHost
-	case youtubeHost, youtuBeHost:
-		name, canonicalHost = youtubeName, "www."+youtubeHost
-	default:
-		return Link{}, false
-	}
-
-	id, ok := videoID(parsed, host)
+	name, canonicalHost, id, ok := videoPath(path)
 	if !ok {
 		return Link{}, false
 	}
@@ -134,6 +128,48 @@ func fromVideoURL(path string) (Link, bool) {
 		Provider: name,
 		URL:      "https://" + canonicalHost + "/watch?v=" + id,
 	}, true
+}
+
+// videoPath extracts a video's provider name, canonical host and id from a
+// path. Find and Artwork both go through it, so the id has exactly one
+// validation site and a provider cannot become linkable without becoming
+// artwork-able in the same change.
+func videoPath(path string) (name, canonicalHost, id string, ok bool) {
+	parsed, err := url.Parse(path)
+	if err != nil || parsed.Scheme != "https" {
+		return "", "", "", false
+	}
+	host := normaliseHost(parsed.Hostname())
+
+	switch host {
+	case youtubeMusicHost:
+		name, canonicalHost = youtubeMusicName, youtubeMusicHost
+	case youtubeHost, youtuBeHost:
+		name, canonicalHost = youtubeName, "www."+youtubeHost
+	default:
+		return "", "", "", false
+	}
+
+	id, ok = videoID(parsed, host)
+	if !ok {
+		return "", "", "", false
+	}
+	return name, canonicalHost, id, true
+}
+
+// Artwork returns the public thumbnail for a video path, and false for every
+// path this package will not link.
+//
+// It is the cheapest tier of the artwork ladder and the only one that costs
+// nothing: a construction from a part videoPath has already validated, with no
+// network, no cache and no host allowlist to keep. The variant is chosen for
+// always existing — see youtubeThumbnail.
+func Artwork(path string) (string, bool) {
+	_, _, id, ok := videoPath(strings.TrimSpace(path))
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf(youtubeThumbnail, id), true
 }
 
 // normaliseHost lowercases the host and drops a leading www. or m., mirroring
