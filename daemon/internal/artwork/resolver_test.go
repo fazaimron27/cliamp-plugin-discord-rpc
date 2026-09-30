@@ -25,6 +25,19 @@ func lastFMReturning(t *testing.T, body string) *artwork.LastFM {
 	return artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
 }
 
+// countingSource is a Source that answers with a fixed TrackInfo and records
+// how often it was asked, which is how a short-circuit is made visible.
+type countingSource struct {
+	info  artwork.TrackInfo
+	err   error
+	calls int
+}
+
+func (c *countingSource) Resolve(context.Context, artwork.Request) (artwork.TrackInfo, error) {
+	c.calls++
+	return c.info, c.err
+}
+
 // TestResolverAlwaysTakesThePagesFromLastFM pins the merge's whole reason for
 // existing. The pages exist in no other source, so they must reach the answer
 // whatever supplied the image.
@@ -55,5 +68,77 @@ func TestResolverWithoutASourceIsEmpty(t *testing.T) {
 	}
 	if info != (artwork.TrackInfo{}) {
 		t.Errorf("Resolve() = %+v; want an empty answer", info)
+	}
+}
+
+// TestResolverPrefersTheDerivedThumbnail covers the derived tier: a video path
+// supplies the image, and it outranks the image Last.fm reported.
+func TestResolverPrefersTheDerivedThumbnail(t *testing.T) {
+	resolver := artwork.Resolver{
+		Derived: func(path string) (string, bool) {
+			if path != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
+				return "", false
+			}
+			return "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg", true
+		},
+		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","album":{"image":[{"#text":"https://img/lastfm.jpg"}]}}}`),
+	}
+	info, err := resolver.Resolve(context.Background(), artwork.Request{
+		Path:   "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+		Artist: "A",
+		Title:  "T",
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if info.Image != "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg" {
+		t.Errorf("Image = %q; want the derived thumbnail", info.Image)
+	}
+}
+
+// TestResolverDerivedTierDoesNotMoveTheLinks pins the thing that must not change
+// when a track gains a thumbnail: the pages are the same ones it would have
+// had with no derived source at all.
+func TestResolverDerivedTierDoesNotMoveTheLinks(t *testing.T) {
+	body := `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"},"album":{"image":[{"#text":"https://img/lastfm.jpg"}]}}}`
+	request := artwork.Request{Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", Artist: "A", Title: "T"}
+
+	without, err := artwork.Resolver{LastFM: lastFMReturning(t, body)}.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Resolve() without a derived source error = %v", err)
+	}
+	with, err := artwork.Resolver{
+		Derived: func(string) (string, bool) {
+			return "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg", true
+		},
+		LastFM: lastFMReturning(t, body),
+	}.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Resolve() with a derived source error = %v", err)
+	}
+	if with.TrackURL != without.TrackURL || with.ArtistURL != without.ArtistURL {
+		t.Errorf("the derived tier moved a link: %+v vs %+v", with, without)
+	}
+	if with.Image == without.Image {
+		t.Errorf("the derived tier changed nothing; Image = %q in both", with.Image)
+	}
+}
+
+// TestResolverDerivedTierShortCircuitsThePlayer pins the cost rule: a path the
+// derived source answers must not also cost a round trip.
+func TestResolverDerivedTierShortCircuitsThePlayer(t *testing.T) {
+	player := &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}}
+	resolver := artwork.Resolver{
+		Derived: func(string) (string, bool) {
+			return "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg", true
+		},
+		Player: player,
+		LastFM: artwork.NewLastFM(""),
+	}
+	if _, err := resolver.Resolve(context.Background(), artwork.Request{Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if player.calls != 0 {
+		t.Errorf("the player was asked %d times after the derived source answered; want 0", player.calls)
 	}
 }

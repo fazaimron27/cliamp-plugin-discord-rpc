@@ -215,9 +215,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cfg.LastFMAPIKey == "" {
 		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
-	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.Resolver{
-		LastFM: artwork.NewLastFM(cfg.LastFMAPIKey),
-	}, time.Now, presenceRefresh)
+	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), newResolver(cfg), time.Now, presenceRefresh)
+}
+
+// newResolver builds the artwork resolver the daemon runs with. It is a
+// function rather than a literal inside Run so a test can hold the assembled
+// resolver — the wiring is what decides which tiers exist, and a literal inside
+// a constructor that dials Discord is a wiring nothing can check.
+func newResolver(cfg config.Config) artwork.Resolver {
+	return artwork.Resolver{
+		Derived: tracklink.Artwork,
+		LastFM:  artwork.NewLastFM(cfg.LastFMAPIKey),
+	}
 }
 
 // run is the daemon's event loop. refresh is a parameter rather than the

@@ -755,3 +755,20 @@ func TestRepublishKeyCoversTheDerivedLinks(t *testing.T) {
 		})
 	}
 }
+
+// TestNewResolverDerivesTheThumbnailForAVideoPath pins the wiring: the resolver
+// the daemon actually builds must answer from the playback path before it asks
+// anyone. The unit tests in artwork drive a Derived the test supplies; this is
+// the one that fails if production forgets to supply it at all.
+func TestNewResolverDerivesTheThumbnailForAVideoPath(t *testing.T) {
+	resolver := newResolver(config.Config{})
+	info, err := resolver.Resolve(context.Background(), artwork.Request{
+		Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if want := "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"; info.Image != want {
+		t.Errorf("Image = %q; want %q", info.Image, want)
+	}
+}
