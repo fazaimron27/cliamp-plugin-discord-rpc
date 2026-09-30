@@ -142,3 +142,93 @@ func TestResolverDerivedTierShortCircuitsThePlayer(t *testing.T) {
 		t.Errorf("the player was asked %d times after the derived source answered; want 0", player.calls)
 	}
 }
+
+// TestResolverPlayerImageDoesNotShadowTheLinks is the regression this whole design
+// exists to prevent. A whole-source precedence would let the player's image
+// carry the answer with it and drop both Last.fm pages, which costs Spotify and
+// Mixcloud their exact track and artist links the moment they gained artwork.
+//
+// It also carries the spec's third named test — that source 3 always runs, even
+// when an image came from elsewhere. The two asserted URLs exist nowhere but in
+// the stub server's body, so a resolvable TrackURL is itself the proof that the
+// Last.fm request was issued; there is no second thing to assert.
+func TestResolverPlayerImageDoesNotShadowTheLinks(t *testing.T) {
+	resolver := artwork.Resolver{
+		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"}}}`),
+	}
+	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if info.Image != "https://i.scdn.co/image/x" {
+		t.Errorf("Image = %q; want the player's artwork", info.Image)
+	}
+	if info.TrackURL != "https://www.last.fm/music/A/_/T" {
+		t.Errorf("TrackURL = %q; the player's image shadowed the Last.fm page", info.TrackURL)
+	}
+	if info.ArtistURL != "https://www.last.fm/music/A" {
+		t.Errorf("ArtistURL = %q; the player's image shadowed the Last.fm artist page", info.ArtistURL)
+	}
+}
+
+// TestResolverPlayerImageSurvivesALastFMFailure pins the merge under failure. The
+// artwork does not depend on Last.fm, so a transient Last.fm error must cost
+// the links rather than the image. The consequence is deliberate and is worth
+// knowing: the daemon publishes what it was given, so artworkInfo.Image is no
+// longer empty and the fifteen-second retry that used to recover the links
+// stops until the track changes.
+func TestResolverPlayerImageSurvivesALastFMFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+	lastfm := artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
+
+	resolver := artwork.Resolver{
+		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		LastFM: lastfm,
+	}
+	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
+	if err == nil {
+		t.Fatal("Resolve() error = nil; want the Last.fm failure reported")
+	}
+	if info.Image != "https://i.scdn.co/image/x" {
+		t.Errorf("Image = %q; want the player's artwork despite the Last.fm failure", info.Image)
+	}
+}
+
+// TestResolverIsUngatedByTheAPIKey pins the shape of the keyless card. Neither new
+// tier consults the key, so a daemon with none still gains both.
+func TestResolverIsUngatedByTheAPIKey(t *testing.T) {
+	request := artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"}
+
+	derived := artwork.Resolver{
+		Derived: func(string) (string, bool) {
+			return "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg", true
+		},
+		LastFM: artwork.NewLastFM(""),
+	}
+	info, err := derived.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if info.Image == "" {
+		t.Error("the derived tier did not fire without an API key")
+	}
+
+	player := artwork.Resolver{
+		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		LastFM: artwork.NewLastFM(""),
+	}
+	info, err = player.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if info.Image == "" {
+		t.Error("the player tier did not fire without an API key")
+	}
+	if info.TrackURL != "" || info.ArtistURL != "" {
+		t.Errorf("a keyless resolver produced links: %+v", info)
+	}
+}

@@ -772,3 +772,37 @@ func TestNewResolverDerivesTheThumbnailForAVideoPath(t *testing.T) {
 		t.Errorf("Image = %q; want %q", info.Image, want)
 	}
 }
+
+// TestNewResolverAsksThePlayerOverTheConfiguredSocket is the player tier's
+// wiring, driven the way production drives it: the resolver the daemon builds,
+// pointed at a socket that answers state.get, must publish the artwork that
+// answer carries. Everything between the configuration and the card is real
+// here except the socket's owner.
+func TestNewResolverAsksThePlayerOverTheConfiguredSocket(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
+			return
+		}
+		_, _ = conn.Write([]byte(`{"version":2,"id":"discord-rpc-state","ok":true,"snapshot":{"track":{"path":"spotify:track:abc","album_art_url":"https://i.scdn.co/image/x"}}}` + "\n"))
+	}()
+
+	resolver := newResolver(config.Config{CliampSocket: socket})
+	info, err := resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if info.Image != "https://i.scdn.co/image/x" {
+		t.Errorf("Image = %q; want the player's artwork", info.Image)
+	}
+}

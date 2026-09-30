@@ -225,6 +225,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 func newResolver(cfg config.Config) artwork.Resolver {
 	return artwork.Resolver{
 		Derived: tracklink.Artwork,
+		Player:  &artwork.Player{Socket: cfg.CliampSocket},
 		LastFM:  artwork.NewLastFM(cfg.LastFMAPIKey),
 	}
 }
