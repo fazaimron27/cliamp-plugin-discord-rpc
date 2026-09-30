@@ -34,7 +34,13 @@ var refusedPaths = []struct {
 	{"yandex with a non-numeric id", "yandex:track:abc"},
 	{"yandex with an album suffix is refused", "yandex:track:123:456"},
 	{"lyrion is self-hosted", "lyrion://track/12345"},
-	{"netease is an spa fragment", "https://music.163.com/#/song?id=12345"},
+	{"netease with a non-numeric id", "https://music.163.com/#/song?id=abc"},
+	{"netease with no id", "https://music.163.com/#/song"},
+	{"netease album page is not a track", "https://music.163.com/#/album?id=12345"},
+	{"netease dj radio is not a track", "https://music.163.com/#/djradio?id=12345"},
+	{"netease path is not the song route", "https://music.163.com/album?id=12345"},
+	{"netease over http is refused", "http://music.163.com/song?id=12345"},
+	{"netease lookalike host", "https://music.163.com.evil.example/song?id=12345"},
 	{"soundcloud is deferred", "https://soundcloud.com/artist/song"},
 	{"mixcloud is deferred", "https://www.mixcloud.com/artist/show/"},
 	{"bandcamp has no provider entry", "https://artist.bandcamp.com/track/song"},
@@ -261,6 +267,51 @@ func TestFindPassesThroughYouTubeURLsNarrowedToTheVideo(t *testing.T) {
 	}
 }
 
+// TestFindRebuildsNeteaseURLs covers the second instance of the rebuild
+// mechanism. The id is in a fragment in the form cliamp builds and in the
+// query in the form the site also accepts, and the published URL is
+// constructed from the id either way, so neither the fragment route nor any
+// parameter beside it can ride along.
+func TestFindRebuildsNeteaseURLs(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want Link
+	}{
+		{
+			name: "the fragment form cliamp builds",
+			path: "https://music.163.com/#/song?id=17241424",
+			want: Link{Provider: "NetEase", URL: "https://music.163.com/song?id=17241424"},
+		},
+		{
+			name: "the fragment-free form",
+			path: "https://music.163.com/song?id=17241424",
+			want: Link{Provider: "NetEase", URL: "https://music.163.com/song?id=17241424"},
+		},
+		{
+			name: "parameters beside the id are dropped",
+			path: "https://music.163.com/#/song?id=17241424&userid=1&from=search",
+			want: Link{Provider: "NetEase", URL: "https://music.163.com/song?id=17241424"},
+		},
+		{
+			name: "an uppercase host is normalised",
+			path: "https://Music.163.COM/#/song?id=17241424",
+			want: Link{Provider: "NetEase", URL: "https://music.163.com/song?id=17241424"},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := Find(testCase.path)
+			if !ok {
+				t.Fatalf("Find(%q) ok=false; want a link", testCase.path)
+			}
+			if got != testCase.want {
+				t.Fatalf("Find(%q) = %+v; want %+v", testCase.path, got, testCase.want)
+			}
+		})
+	}
+}
+
 // TestArtistSearchEscapesTheName covers the one string this package composes
 // rather than translates: the artist name comes from metadata and can contain
 // separators that would otherwise break the route.
@@ -336,6 +387,7 @@ var linkablePaths = []struct {
 	{"youtube music watch", "https://music.youtube.com/watch?v=dQw4w9WgXcQ"},
 	{"tidal track", "tidal://track/123456789"},
 	{"yandex track", "yandex:track:12345678"},
+	{"netease song", "https://music.163.com/#/song?id=17241424"},
 }
 
 // routeLessProviders names the providers that deliberately have no artist
@@ -344,8 +396,9 @@ var linkablePaths = []struct {
 // provider named here still has to say why. Four of the five providers this
 // work links have no confirmed route, so this list starts empty and fills.
 var routeLessProviders = map[string]string{
-	tidalName:  "no search route confirmed; the artist falls back to Last.fm",
-	yandexName: "no search route confirmed; the artist falls back to Last.fm",
+	tidalName:   "no search route confirmed; the artist falls back to Last.fm",
+	yandexName:  "no search route confirmed; the artist falls back to Last.fm",
+	neteaseName: "no search route confirmed; the artist falls back to Last.fm",
 }
 
 // TestEveryLinkableProviderHasAnArtistRoute is the guard that closes the one

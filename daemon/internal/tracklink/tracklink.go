@@ -14,8 +14,9 @@ package tracklink
 //
 //   - URI translation: a spotify:track:<id> or tidal://track/<id> URI has no
 //     public form of its own, so it is translated into one.
-//   - URL pass-through: a YouTube watch URL is already public, so it is
-//     published only after its host is checked and its identity rebuilt.
+//   - URL rebuild: a YouTube watch URL or a NetEase page URL is already
+//     public, so it is published only after its host is checked and its
+//     identity rebuilt from the id.
 //
 // Both are allowlists. A blocklist would fail open the moment a provider is
 // added or a rule is missed, and five of Cliamp's providers already put a live
@@ -33,6 +34,7 @@ const (
 	youtubeMusicName = "YouTube Music"
 	tidalName        = "Tidal"
 	yandexName       = "Yandex Music"
+	neteaseName      = "NetEase"
 
 	spotifyTrackPrefix   = "spotify:track:"
 	spotifyEpisodePrefix = "spotify:episode:"
@@ -42,6 +44,7 @@ const (
 	youtubeHost      = "youtube.com"
 	youtubeMusicHost = "music.youtube.com"
 	youtuBeHost      = "youtu.be"
+	neteaseHost      = "music.163.com"
 
 	// videoIDLength is the only length a YouTube video id has. Requiring it is
 	// what makes "v=short" a refusal rather than a published link.
@@ -54,6 +57,13 @@ const (
 	// 4:3 canvas with the frame letterboxed inside it. mqdefault is the one
 	// that both always exists and is clean 16:9.
 	youtubeThumbnail = "https://i.ytimg.com/vi/%s/mqdefault.jpg"
+
+	// neteaseSongRoute is the one fragment route that addresses a song. The
+	// album and djradio routes share the host and the id parameter, so the
+	// route is checked rather than the parameter alone.
+	neteaseSongRoute = "/song"
+
+	neteasePage = "https://music.163.com/song?id=%s"
 )
 
 // Link is a provider track's public identity: where it lives, and what to call
@@ -76,6 +86,9 @@ func Find(path string) (Link, bool) {
 		return link, true
 	}
 	if link, ok := fromVideoURL(path); ok {
+		return link, true
+	}
+	if link, ok := fromNeteaseURL(path); ok {
 		return link, true
 	}
 	return Link{}, false
@@ -188,6 +201,52 @@ func videoPath(path string) (name, canonicalHost, id string, ok bool) {
 		return "", "", "", false
 	}
 	return name, canonicalHost, id, true
+}
+
+// fromNeteaseURL handles the rebuild mechanism for NetEase. The published URL
+// is constructed from the validated id rather than reused, so the fragment
+// route, a parameter beside the id, and the host itself cannot ride along.
+func fromNeteaseURL(path string) (Link, bool) {
+	parsed, err := url.Parse(path)
+	if err != nil || parsed.Scheme != "https" {
+		return Link{}, false
+	}
+	if normaliseHost(parsed.Hostname()) != neteaseHost {
+		return Link{}, false
+	}
+	id, ok := neteaseID(parsed)
+	if !ok {
+		return Link{}, false
+	}
+	return Link{Provider: neteaseName, URL: fmt.Sprintf(neteasePage, id)}, true
+}
+
+// neteaseID reads the song id from either form: the "#/song?id=<id>" fragment
+// cliamp builds, and the plain "?id=<id>" that the site accepts and that
+// survives a client which mangles fragments. A fragment addressing anything
+// else is refused rather than read, and so is an id-free path on another
+// route, because publishing a song page for an album's id is exactly the
+// wrong-page failure this package exists to refuse.
+func neteaseID(parsed *url.URL) (string, bool) {
+	if parsed.Fragment != "" {
+		route, err := url.Parse(parsed.Fragment)
+		if err != nil || route.Path != neteaseSongRoute {
+			return "", false
+		}
+		return neteaseSongID(route.Query().Get("id"))
+	}
+	if parsed.Path != "" && parsed.Path != "/" && parsed.Path != neteaseSongRoute {
+		return "", false
+	}
+	return neteaseSongID(parsed.Query().Get("id"))
+}
+
+// neteaseSongID reports the id if it is one, and the empty string otherwise.
+func neteaseSongID(id string) (string, bool) {
+	if !isNumericID(id) {
+		return "", false
+	}
+	return id, true
 }
 
 // Artwork returns the public thumbnail for a video path, and false for every
