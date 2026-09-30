@@ -270,7 +270,10 @@ search without one, and a dash means that provider's path is published nowhere
 at all: a local file has no public page, a podcast episode and a radio stream
 have no stable identity, and the self-hosted servers and Qobuz resolve their
 streams through URLs that carry a live credential. `Radio` covers Cliamp's
-built-in channels as well as your own stations.
+built-in channels as well as your own stations. `YouTube (All)` is Cliamp's
+third YouTube choice and needs no row of its own: it lists every playlist,
+music and video alike, where YouTube and YouTube Music keep to one kind each,
+and all three hand the same video URL to the card.
 
 ### Use a custom Discord application
 
