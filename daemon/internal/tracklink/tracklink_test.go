@@ -513,3 +513,36 @@ func TestEveryLinkableProviderHasAnArtistRoute(t *testing.T) {
 		})
 	}
 }
+
+// maxButtonLabel is Discord's cap on a rich presence button label, taken from
+// the Activity Button object in its gateway documentation: 1-32 characters.
+// labelVerb is the longest prefix internal/presence puts in front of a provider
+// name, so the name is the part with room to spare — and a name's length is
+// decided here.
+//
+// It is a guarded constraint rather than a measured one: the SET_ACTIVITY reply
+// is a blind echo, so nothing in this repository can observe what Discord does
+// with a label it dislikes. A documented cap that nothing checks is a cap that
+// holds until someone adds a provider.
+const (
+	maxButtonLabel = 32
+	labelVerb      = "Listen on "
+)
+
+// TestEveryLinkableProviderNameFitsTheButtonLabel keeps provider names inside
+// the room a button label has. It drives the same corpus as the route guard
+// above, so a provider added to Find is measured in the same commit.
+func TestEveryLinkableProviderNameFitsTheButtonLabel(t *testing.T) {
+	for _, testCase := range linkablePaths {
+		t.Run(testCase.name, func(t *testing.T) {
+			link, ok := Find(testCase.path)
+			if !ok {
+				t.Fatalf("Find(%q) ok=false; want a link", testCase.path)
+			}
+			label := labelVerb + link.Provider
+			if got := len([]rune(label)); got > maxButtonLabel {
+				t.Fatalf("button label %q is %d characters; Discord caps a label at %d", label, got, maxButtonLabel)
+			}
+		})
+	}
+}
