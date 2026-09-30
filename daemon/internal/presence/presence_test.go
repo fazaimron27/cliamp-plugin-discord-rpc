@@ -29,7 +29,7 @@ func TestPresenceBuildsPlayingActivity(t *testing.T) {
 	if activity.Timestamps == nil || activity.Timestamps.Start != 970 || activity.Timestamps.End != 1210 {
 		t.Fatalf("timestamps = %+v", activity.Timestamps)
 	}
-	if len(activity.Buttons) != 2 || activity.Buttons[0].Label != "View on Last.fm" || activity.Buttons[0].URL != "https://www.last.fm/search?q=Artist+Track" || activity.Buttons[1].Label != "Get Cliamp" || activity.Buttons[1].URL != "https://www.cliamp.stream/" {
+	if len(activity.Buttons) != 2 || activity.Buttons[0].Label != "View on Last.fm" || activity.Buttons[0].URL != "https://www.last.fm/search?q=Artist+Track" || activity.Buttons[1].Label != "Get Cliamp Music Player" || activity.Buttons[1].URL != "https://www.cliamp.stream/" {
 		t.Fatalf("buttons = %+v", activity.Buttons)
 	}
 }
@@ -62,7 +62,7 @@ func TestPresenceOmitsTrackButtonWhenNotLinkable(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			activity := presence.Build(testCase.state, presence.Options{}, "", presence.Links{}, time.Unix(1000, 0))
-			if len(activity.Buttons) != 1 || activity.Buttons[0].Label != "Get Cliamp" || activity.Buttons[0].URL != "https://www.cliamp.stream/" {
+			if len(activity.Buttons) != 1 || activity.Buttons[0].Label != "Get Cliamp Music Player" || activity.Buttons[0].URL != "https://www.cliamp.stream/" {
 				t.Fatalf("buttons = %+v", activity.Buttons)
 			}
 		})
@@ -120,7 +120,7 @@ func TestPresencePayloadContainsOnlyPublicTrackMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "path") || strings.Contains(string(data), "View Plugin") || strings.Contains(string(data), "github.com") || !strings.Contains(string(data), "Get Cliamp") || !strings.Contains(string(data), "View on Last.fm") {
+	if strings.Contains(string(data), "path") || strings.Contains(string(data), "View Plugin") || strings.Contains(string(data), "github.com") || !strings.Contains(string(data), "Get Cliamp Music Player") || !strings.Contains(string(data), "View on Last.fm") {
 		t.Fatalf("unexpected activity payload: %s", data)
 	}
 }
@@ -150,8 +150,8 @@ func TestPresenceLinksAProviderTrackToItsOwnService(t *testing.T) {
 	if activity.StateURL != links.ArtistSearchURL {
 		t.Errorf("StateURL = %q; want the provider artist search", activity.StateURL)
 	}
-	if len(activity.Buttons) != 2 || activity.Buttons[0].Label != "View on Spotify" || activity.Buttons[0].URL != links.ProviderURL {
-		t.Errorf("buttons = %+v; want View on Spotify first", activity.Buttons)
+	if len(activity.Buttons) != 2 || activity.Buttons[0].Label != "Listen on Spotify" || activity.Buttons[0].URL != links.ProviderURL {
+		t.Errorf("buttons = %+v; want Listen on Spotify first", activity.Buttons)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestPresenceFallsBackToTheLastFmPages(t *testing.T) {
 
 // The artist follows the track's destination wherever it can. A provider link
 // is the service the listener is actually playing from, so its search outranks
-// the exact Last.fm artist page: a card whose button reads "View on Spotify"
+// the exact Last.fm artist page: a card whose button reads "Listen on Spotify"
 // and whose artist opens Last.fm is pointing two ways at once. The Last.fm page
 // takes over for the tracks no provider claims, and the Last.fm search covers
 // everything else — so every tier but the last needs neither a key nor an id,
@@ -255,8 +255,8 @@ func TestPresenceLinksAStreamWhenThePathIdentifiesTheTrack(t *testing.T) {
 	}
 	activity := presence.Build(state, presence.Options{}, "", links, time.Unix(1000, 0))
 
-	if len(activity.Buttons) != 2 || activity.Buttons[0].Label != "View on YouTube" || activity.Buttons[0].URL != links.ProviderURL {
-		t.Fatalf("buttons = %+v; want View on YouTube first", activity.Buttons)
+	if len(activity.Buttons) != 2 || activity.Buttons[0].Label != "Listen on YouTube" || activity.Buttons[0].URL != links.ProviderURL {
+		t.Fatalf("buttons = %+v; want Listen on YouTube first", activity.Buttons)
 	}
 	if activity.DetailsURL != links.ProviderURL {
 		t.Errorf("DetailsURL = %q; want the video", activity.DetailsURL)

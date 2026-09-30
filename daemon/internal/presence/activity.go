@@ -22,10 +22,15 @@ const (
 	maxDetailsRunes       = 48
 	maxStateRunes         = 40
 
-	getCliampLabel = "Get Cliamp"
+	getCliampLabel = "Get Cliamp Music Player"
 	getCliampURL   = "https://www.cliamp.stream/"
 	lastFMName     = "Last.fm"
 	lastFMSearch   = "https://www.last.fm/search"
+
+	// listenOnPrefix and viewOnPrefix are the two verbs the track button can
+	// carry, one per kind of destination: a provider page is somewhere the track
+	// is played, a Last.fm page is only ever read. See trackTarget.
+	listenOnPrefix = "Listen on "
 	viewOnPrefix   = "View on "
 )
 
@@ -45,8 +50,10 @@ type Options struct {
 // fields for URI syntax alone and rejects the whole activity when one is
 // malformed, so a value that is not known to be a URL must never be sent.
 type Links struct {
-	// Provider names the service ProviderURL belongs to, and becomes the button
-	// label. It is empty when the playback path matched no allowlist.
+	// Provider names the service ProviderURL belongs to. Only the name is carried
+	// here: the verb in front of it belongs to the destination rather than to the
+	// service, and trackTarget adds it. It is empty when the playback path
+	// matched no allowlist.
 	Provider string
 	// ProviderURL is that service's own page for the track, derived from the
 	// playback path.
@@ -89,19 +96,29 @@ type Activity struct {
 // buttons returns the CTA pair for a snapshot: a track link when one was
 // resolved, then the app link. Discord renders at most two buttons.
 func buttons(s playback.State, links Links) []Button {
-	if target, name := trackTarget(s, links); target != "" {
-		return []Button{{Label: viewOnPrefix + name, URL: target}, getCliampButton}
+	if target, label := trackTarget(s, links); target != "" {
+		return []Button{{Label: label, URL: target}, getCliampButton}
 	}
 	return []Button{getCliampButton}
 }
 
-// trackTarget returns the URL the track button opens and the name to label it
-// with. The provider's own page wins whenever the path yielded one, then the
+// trackTarget returns the URL the track button opens and the label to put on
+// it. The provider's own page wins whenever the path yielded one, then the
 // Last.fm track page, then Last.fm search.
 //
-// The label has to move with the destination: a fixed "View on Last.fm" would
-// be wrong on every provider track, and wrong in the way the reader cannot
-// detect from the card.
+// The label moves with the destination in both of its parts. In the name,
+// because a fixed "View on Last.fm" would be wrong on every provider track, and
+// wrong in the way the reader cannot detect from the card. In the verb, because
+// the two destinations are different kinds of place: a provider page is where
+// the listener goes to play the track again, so the track is listened on there,
+// while a Last.fm page has no playback at all and is only ever read. "Listen on
+// Last.fm" would be a plain falsehood — and the "View" it replaces was the
+// other mistake, a card that says "Listening to" and then offers a song to look
+// at.
+//
+// Every provider tracklink accepts is a service you play from, which is why the
+// provider tier takes the listening verb unconditionally rather than consulting
+// a list.
 //
 // Search stays as the last tier on purpose. It is the only one that works with
 // neither a key nor a recognised path, so dropping it would leave anyone
@@ -114,12 +131,12 @@ func buttons(s playback.State, links Links) []Button {
 // search tier needs, and YouTube — flagged as a stream because it plays through
 // yt-dlp — is a case where linking is plainly right. So the button is offered
 // to a stream on the same terms as to anything else.
-func trackTarget(s playback.State, links Links) (string, string) {
+func trackTarget(s playback.State, links Links) (target, label string) {
 	if links.ProviderURL != "" {
-		return links.ProviderURL, links.Provider
+		return links.ProviderURL, listenOnPrefix + links.Provider
 	}
 	if links.TrackURL != "" {
-		return links.TrackURL, lastFMName
+		return links.TrackURL, viewOnPrefix + lastFMName
 	}
 	artist := strings.TrimSpace(s.Artist)
 	title := strings.TrimSpace(s.Title)
@@ -128,7 +145,7 @@ func trackTarget(s playback.State, links Links) (string, string) {
 	}
 	query := url.Values{}
 	query.Set("q", artist+" "+title)
-	return lastFMSearch + "?" + query.Encode(), lastFMName
+	return lastFMSearch + "?" + query.Encode(), viewOnPrefix + lastFMName
 }
 
 // trackPage is the exact page for the track, which is what the title and the

@@ -288,8 +288,11 @@ exists to refuse. The card falls back to a Last.fm search, which needs no key.
 ## Card Links
 
 The title, the artist, and the album art are links when the daemon knows where
-they should point, and the first button is labelled for its destination so the
-card never promises Last.fm and then opens Spotify. None of this costs a
+they should point, and the first button is labelled for its destination in both
+its name and its verb: the name so the card never promises Last.fm and then
+opens Spotify, and the verb because only a provider page is a place the track is
+played. A Last.fm page is read rather than played, so it keeps "View on", and no
+song on the card is offered as something to look at. None of this costs a
 request: each URL is either already in the payload or a string parse of it.
 
 The track link is the provider's own page when the playback path identifies one,
