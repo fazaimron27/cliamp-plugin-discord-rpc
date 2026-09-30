@@ -48,11 +48,15 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
+// response is the v2 answer frame, shared by the subscription acknowledgement
+// and the state request. The snapshot is kept raw because only the state
+// request reads it, and the two callers decode different parts.
 type response struct {
-	Version int       `json:"version"`
-	ID      string    `json:"id,omitempty"`
-	OK      bool      `json:"ok"`
-	Error   *rpcError `json:"error,omitempty"`
+	Version  int             `json:"version"`
+	ID       string          `json:"id,omitempty"`
+	OK       bool            `json:"ok"`
+	Snapshot json.RawMessage `json:"snapshot,omitempty"`
+	Error    *rpcError       `json:"error,omitempty"`
 }
 
 type event struct {

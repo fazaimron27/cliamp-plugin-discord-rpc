@@ -15,41 +15,46 @@ import (
 // every one of them must come back unlinked: a local filesystem path, a radio
 // stream with no stable identity, and above all the self-hosted stream URLs,
 // which carry a live credential in the path itself.
+// refusedPaths is the corpus every refusal guard in this package iterates. It
+// is one list rather than one per entry point on purpose: the property worth
+// holding is that a path Find refuses, Artwork refuses too, and that property
+// is only total if both are driven by the same corpus.
+var refusedPaths = []struct {
+	name string
+	path string
+}{
+	{"empty path", ""},
+	{"whitespace only", "   "},
+	{"local filesystem path", "/home/faza/Music/AC-DC/Back in Black.flac"},
+	{"relative filesystem path", "Music/song.mp3"},
+	{"navidrome stream carries a credential", "https://music.example.com/rest/stream?id=1&u=faza&t=deadbeef"},
+	{"plex stream carries a token", "https://plex.example.com/library/parts/9/file.flac?X-Plex-Token=secret"},
+	{"jellyfin stream carries an api key", "https://jf.example.com/media/Items/track-1/Download?api_key=new-token"},
+	{"audiobookshelf stream carries a token", "https://abs.example.com/api/items/i1/file/1?token=auth"},
+	{"radio stream has no stable identity", "https://stream.example.com/live.mp3"},
+	{"deferred tidal", "tidal://track/12345"},
+	{"deferred yandex", "yandex:track:12345"},
+	{"lyrion is self-hosted", "lyrion://track/12345"},
+	{"netease is an spa fragment", "https://music.163.com/#/song?id=12345"},
+	{"soundcloud is deferred", "https://soundcloud.com/artist/song"},
+	{"mixcloud is deferred", "https://www.mixcloud.com/artist/show/"},
+	{"bandcamp has no provider entry", "https://artist.bandcamp.com/track/song"},
+	{"spotify album is not a track", "spotify:album:1DFixLWuPkv3KT3TnV35m3"},
+	{"spotify track with no id", "spotify:track:"},
+	{"spotify track with a path traversal", "spotify:track:../../../evil"},
+	{"spotify track with a query", "spotify:track:abc?x=1"},
+	{"spotify track with a fragment", "spotify:track:abc#x"},
+	{"youtube over http is refused", "http://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+	{"youtube with a javascript scheme", "javascript:alert(1)"},
+	{"youtube lookalike host", "https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ"},
+	{"youtube with no video id", "https://www.youtube.com/watch"},
+	{"youtube with a truncated video id", "https://www.youtube.com/watch?v=short"},
+	{"youtube with a video id outside the charset", "https://www.youtube.com/watch?v=dQw4w9WgXc."},
+	{"youtube music over http is refused", "http://music.youtube.com/watch?v=dQw4w9WgXcQ"},
+}
+
 func TestFindRefusesEveryPathWeMustNotPublish(t *testing.T) {
-	cases := []struct {
-		name string
-		path string
-	}{
-		{"empty path", ""},
-		{"whitespace only", "   "},
-		{"local filesystem path", "/home/faza/Music/AC-DC/Back in Black.flac"},
-		{"relative filesystem path", "Music/song.mp3"},
-		{"navidrome stream carries a credential", "https://music.example.com/rest/stream?id=1&u=faza&t=deadbeef"},
-		{"plex stream carries a token", "https://plex.example.com/library/parts/9/file.flac?X-Plex-Token=secret"},
-		{"jellyfin stream carries an api key", "https://jf.example.com/media/Items/track-1/Download?api_key=new-token"},
-		{"audiobookshelf stream carries a token", "https://abs.example.com/api/items/i1/file/1?token=auth"},
-		{"radio stream has no stable identity", "https://stream.example.com/live.mp3"},
-		{"deferred tidal", "tidal://track/12345"},
-		{"deferred yandex", "yandex:track:12345"},
-		{"lyrion is self-hosted", "lyrion://track/12345"},
-		{"netease is an spa fragment", "https://music.163.com/#/song?id=12345"},
-		{"soundcloud is deferred", "https://soundcloud.com/artist/song"},
-		{"mixcloud is deferred", "https://www.mixcloud.com/artist/show/"},
-		{"bandcamp has no provider entry", "https://artist.bandcamp.com/track/song"},
-		{"spotify album is not a track", "spotify:album:1DFixLWuPkv3KT3TnV35m3"},
-		{"spotify track with no id", "spotify:track:"},
-		{"spotify track with a path traversal", "spotify:track:../../../evil"},
-		{"spotify track with a query", "spotify:track:abc?x=1"},
-		{"spotify track with a fragment", "spotify:track:abc#x"},
-		{"youtube over http is refused", "http://www.youtube.com/watch?v=dQw4w9WgXcQ"},
-		{"youtube with a javascript scheme", "javascript:alert(1)"},
-		{"youtube lookalike host", "https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ"},
-		{"youtube with no video id", "https://www.youtube.com/watch"},
-		{"youtube with a truncated video id", "https://www.youtube.com/watch?v=short"},
-		{"youtube with a video id outside the charset", "https://www.youtube.com/watch?v=dQw4w9WgXc."},
-		{"youtube music over http is refused", "http://music.youtube.com/watch?v=dQw4w9WgXcQ"},
-	}
-	for _, testCase := range cases {
+	for _, testCase := range refusedPaths {
 		t.Run(testCase.name, func(t *testing.T) {
 			got, ok := Find(testCase.path)
 			if ok {
@@ -57,6 +62,73 @@ func TestFindRefusesEveryPathWeMustNotPublish(t *testing.T) {
 			}
 			if got.URL != "" {
 				t.Fatalf("Find(%q) returned a URL %q alongside ok=false", testCase.path, got.URL)
+			}
+		})
+	}
+}
+
+// TestArtworkRefusesEveryPathFindRefuses is the guard that keeps the two entry
+// points from drifting apart. They share one parser, so a path that yields no
+// link must yield no thumbnail: if this fails, a credential-bearing path or a
+// local filename has found a second way onto the card.
+func TestArtworkRefusesEveryPathFindRefuses(t *testing.T) {
+	for _, testCase := range refusedPaths {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got, ok := Artwork(testCase.path); ok {
+				t.Errorf("Artwork(%q) = %q, ok=true; want ok=false", testCase.path, got)
+			}
+		})
+	}
+}
+
+// TestArtworkDerivesAThumbnailOnlyForVideoPaths covers the derived tier: a
+// video path yields the thumbnail for its own id, through the same host
+// normalisation and the same narrowing Find applies.
+func TestArtworkDerivesAThumbnailOnlyForVideoPaths(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "youtube watch",
+			path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+			want: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+		},
+		{
+			name: "youtu.be short link",
+			path: "https://youtu.be/dQw4w9WgXcQ",
+			want: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+		},
+		{
+			name: "youtube music shares the video id",
+			path: "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+			want: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+		},
+		{
+			name: "a playlist and a timestamp do not reach the thumbnail",
+			path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabcdefg&index=4&t=42s",
+			want: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+		},
+		{
+			name: "mobile host is normalised",
+			path: "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+			want: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+		},
+		{
+			name: "an uppercase host is normalised",
+			path: "https://WWW.YouTube.COM/watch?v=dQw4w9WgXcQ",
+			want: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := Artwork(testCase.path)
+			if !ok {
+				t.Fatalf("Artwork(%q) ok=false; want a thumbnail", testCase.path)
+			}
+			if got != testCase.want {
+				t.Fatalf("Artwork(%q) = %q; want %q", testCase.path, got, testCase.want)
 			}
 		})
 	}

@@ -109,8 +109,20 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 
 type noArtwork struct{}
 
-func (noArtwork) Resolve(context.Context, string, string) (artwork.TrackInfo, error) {
-	return artwork.TrackInfo{}, nil
+func (noArtwork) Resolve(_ context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
+	report(artwork.TrackInfo{}, nil)
+}
+
+// resolveFully runs a staged resolve to completion and returns the answer it
+// finished on, which is what a test asserting the merged result cares about.
+// A test that cares about the staging itself collects every report instead.
+func resolveFully(ctx context.Context, resolver artworkResolver, request artwork.Request) (artwork.TrackInfo, error) {
+	var info artwork.TrackInfo
+	var err error
+	resolver.Resolve(ctx, request, func(reported artwork.TrackInfo, reportedErr error) {
+		info, err = reported, reportedErr
+	})
+	return info, err
 }
 
 // serveCliampEvent performs the v2 handshake and publishes one snapshot carrying
@@ -489,16 +501,16 @@ func newGatedArtwork() *gatedArtwork {
 	return &gatedArtwork{entered: make(chan struct{}, 8), release: make(chan string, 8)}
 }
 
-func (g *gatedArtwork) Resolve(ctx context.Context, _, _ string) (artwork.TrackInfo, error) {
+func (g *gatedArtwork) Resolve(ctx context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
 	select {
 	case g.entered <- struct{}{}:
 	default:
 	}
 	select {
 	case image := <-g.release:
-		return artwork.TrackInfo{Image: image}, nil
+		report(artwork.TrackInfo{Image: image}, nil)
 	case <-ctx.Done():
-		return artwork.TrackInfo{}, ctx.Err()
+		report(artwork.TrackInfo{}, ctx.Err())
 	}
 }
 
@@ -511,6 +523,25 @@ func (g *gatedArtwork) awaitLookup(t *testing.T) {
 	case <-g.entered:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the daemon never asked Last.fm for artwork")
+	}
+}
+
+// stagedArtwork reports the answer that needed no request at once, then holds
+// the rest of the merge until the test releases it. It is what makes the
+// staging observable from the loop: nothing but the first report ever carries
+// the free image, so an activity showing it can only have been published while
+// the resolver was still blocked.
+type stagedArtwork struct {
+	free    artwork.TrackInfo
+	release chan artwork.TrackInfo
+}
+
+func (s *stagedArtwork) Resolve(ctx context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
+	report(s.free, nil)
+	select {
+	case rest := <-s.release:
+		report(rest, nil)
+	case <-ctx.Done():
 	}
 }
 
@@ -536,11 +567,11 @@ type countingArtwork struct {
 	image    string
 }
 
-func (c *countingArtwork) Resolve(context.Context, string, string) (artwork.TrackInfo, error) {
+func (c *countingArtwork) Resolve(_ context.Context, _ artwork.Request, report func(artwork.TrackInfo, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.requests++
-	return artwork.TrackInfo{Image: c.image}, nil
+	report(artwork.TrackInfo{Image: c.image}, nil)
 }
 
 func (c *countingArtwork) count() int {
@@ -618,6 +649,50 @@ func TestRunRepublishesPresenceWhenTheArtworkArrives(t *testing.T) {
 	waitFor(t, "the artwork to reach Discord", func() bool {
 		for _, activity := range client.snapshot() {
 			if activity.Assets != nil && activity.Assets.LargeImage == image {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A thumbnail derived from the playback path costs no request, so the card can
+// carry it while the lookup for the pages is still open — which is the point of
+// reporting the merge in stages. Before that, the resolver spoke once, when
+// Last.fm had answered, and the fallback asset stayed on the card for the whole
+// round trip.
+//
+// The loop needed no change for this: it republishes on every answer it is
+// handed and discards the ones for a track it has left. This test is what holds
+// that property down, since the resolver is a stub here and the staging it
+// exercises belongs to the real one.
+func TestRunPublishesTheDerivedThumbnailWhileTheLookupIsOpen(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	const (
+		thumbnail = "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
+		trackURL  = "https://www.last.fm/music/Artist/_/Track"
+	)
+	lookup := &stagedArtwork{
+		free:    artwork.TrackInfo{Image: thumbnail},
+		release: make(chan artwork.TrackInfo, 1),
+	}
+	client := startDaemon(t, socket, lookup, presenceRefresh)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the thumbnail to reach Discord", func() bool {
+		for _, activity := range client.snapshot() {
+			if activity.Assets != nil && activity.Assets.LargeImage == thumbnail {
+				return true
+			}
+		}
+		return false
+	})
+
+	lookup.release <- artwork.TrackInfo{Image: thumbnail, TrackURL: trackURL}
+	waitFor(t, "the pages to reach Discord", func() bool {
+		for _, activity := range client.snapshot() {
+			if activity.DetailsURL == trackURL {
 				return true
 			}
 		}
@@ -753,5 +828,56 @@ func TestRepublishKeyCoversTheDerivedLinks(t *testing.T) {
 				t.Errorf("a changed %s does not change the republish key", testCase.name)
 			}
 		})
+	}
+}
+
+// TestNewResolverDerivesTheThumbnailForAVideoPath pins the wiring: the resolver
+// the daemon actually builds must answer from the playback path before it asks
+// anyone. The unit tests in artwork drive a Derived the test supplies; this is
+// the one that fails if production forgets to supply it at all.
+func TestNewResolverDerivesTheThumbnailForAVideoPath(t *testing.T) {
+	resolver := newResolver(config.Config{})
+	info, err := resolveFully(context.Background(), resolver, artwork.Request{
+		Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if want := "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"; info.Image != want {
+		t.Errorf("Image = %q; want %q", info.Image, want)
+	}
+}
+
+// TestNewResolverAsksThePlayerOverTheConfiguredSocket is the player tier's
+// wiring, driven the way production drives it: the resolver the daemon builds,
+// pointed at a socket that answers state.get, must publish the artwork that
+// answer carries. Everything between the configuration and the card is real
+// here except the socket's owner.
+func TestNewResolverAsksThePlayerOverTheConfiguredSocket(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
+			return
+		}
+		_, _ = conn.Write([]byte(`{"version":2,"id":"discord-rpc-state","ok":true,"snapshot":{"track":{"path":"spotify:track:abc","album_art_url":"https://i.scdn.co/image/x"}}}` + "\n"))
+	}()
+
+	resolver := newResolver(config.Config{CliampSocket: socket})
+	info, err := resolveFully(context.Background(), resolver, artwork.Request{Path: "spotify:track:abc"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if info.Image != "https://i.scdn.co/image/x" {
+		t.Errorf("Image = %q; want the player's artwork", info.Image)
 	}
 }

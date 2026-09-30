@@ -199,7 +199,7 @@ in their own section, and every one of them is optional:
 ```toml
 [plugins.discord-rpc]
 transport = "ipc"      # ipc (default) or file
-# lastfm_api_key = ""  # a Last.fm key enables artwork and exact links
+# lastfm_api_key = ""  # a Last.fm key enables exact links and last-resort artwork
 # app_id = ""          # your own Discord application ID
 # state_path = "/home/user/.local/share/cliamp/rpc-state.json"   # file transport only
 ```
@@ -221,13 +221,15 @@ Only the API key is needed. Do not add the Last.fm shared secret.
 
 The key does two things, and the card works without it:
 
-- **Album artwork.** When the key is absent or empty, artwork lookup is disabled
-  and the community-maintained static Discord asset is used instead.
-- **Exact track and artist pages.** The same lookup reports the track's own
-  Last.fm page and its artist's, which the card links to. Without a key those
-  links are left off rather than guessed at: a constructed URL is right most of
-  the time, and a link that opens the wrong page is worse than one that opens
-  nothing.
+- **Exact track and artist pages.** The lookup reports the track's own Last.fm
+  page and its artist's, which the card links to. Without a key those links are
+  left off rather than guessed at: a constructed URL is right most of the time,
+  and a link that opens the wrong page is worse than one that opens nothing.
+- **Artwork for the tracks no other source covers.** A YouTube video's
+  thumbnail, derived from the playback path, and the artwork Cliamp holds for a
+  Spotify or Mixcloud track need no key. What neither covers — a local file, a
+  podcast, a radio stream — takes its image from Last.fm when the key is set,
+  and the community-maintained static Discord asset when it is not.
 
 Where a link cannot be resolved, the card falls back to a Last.fm **search**,
 which needs no key. So without one, a local track still offers a working search
@@ -353,7 +355,9 @@ systemctl --user stop cliamp-rpcd
 ```
 
 The built-in Application ID is used unless a custom value is supplied. The
-Last.fm API key is optional and artwork lookup is disabled when it is empty.
+Last.fm API key is optional: without it the card still takes the thumbnail
+derived from a YouTube path and the artwork Cliamp holds for Spotify and
+Mixcloud, and loses only what Last.fm alone can supply.
 
 ### Nothing appears with the file transport
 
@@ -384,8 +388,8 @@ reaches it in `[plugins.discord-rpc]`.
 
 The plugin hands the daemon a complete playback snapshot whenever Cliamp starts,
 changes track, changes playback state, seeks, or quits. The daemon resolves
-optional album artwork through Last.fm and updates Discord over its local IPC
-socket.
+album artwork from the playback path, from Cliamp itself, and through Last.fm,
+then updates Discord over its local IPC socket.
 
 By default those snapshots travel over Cliamp's IPC broker, and the subscription
 doubles as the liveness signal: pausing or stopping clears activity, and an
