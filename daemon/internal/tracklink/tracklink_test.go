@@ -41,8 +41,22 @@ var refusedPaths = []struct {
 	{"netease path is not the song route", "https://music.163.com/album?id=12345"},
 	{"netease over http is refused", "http://music.163.com/song?id=12345"},
 	{"netease lookalike host", "https://music.163.com.evil.example/song?id=12345"},
-	{"soundcloud is deferred", "https://soundcloud.com/artist/song"},
-	{"mixcloud is deferred", "https://www.mixcloud.com/artist/show/"},
+	{"soundcloud profile tab is not a track", "https://soundcloud.com/artist/tracks"},
+	{"soundcloud set is not a track", "https://soundcloud.com/artist/sets/summer"},
+	{"soundcloud stations namespace is refused", "https://soundcloud.com/stations/track"},
+	{"soundcloud with one segment", "https://soundcloud.com/artist"},
+	{"soundcloud with three segments", "https://soundcloud.com/artist/song/extra"},
+	{"soundcloud with a path traversal", "https://soundcloud.com/../evil"},
+	{"soundcloud with a percent-encoded segment", "https://soundcloud.com/artist/a%20b"},
+	{"soundcloud with an encoded separator", "https://soundcloud.com/artist%2Fevil/song"},
+	{"soundcloud with a credential in the authority", "https://user:secret@soundcloud.com/artist/song"},
+	{"soundcloud over http is refused", "http://soundcloud.com/artist/song"},
+	{"soundcloud lookalike host", "https://soundcloud.com.evil.example/artist/song"},
+	{"mixcloud profile tab is not a track", "https://www.mixcloud.com/artist/stream"},
+	{"mixcloud with one segment", "https://www.mixcloud.com/artist"},
+	{"mixcloud with three segments", "https://www.mixcloud.com/artist/show/extra"},
+	{"mixcloud beta host is not on the allowlist", "https://beta.mixcloud.com/artist/show"},
+	{"mixcloud over http is refused", "http://www.mixcloud.com/artist/show"},
 	{"bandcamp has no provider entry", "https://artist.bandcamp.com/track/song"},
 	{"spotify album is not a track", "spotify:album:1DFixLWuPkv3KT3TnV35m3"},
 	{"spotify track with no id", "spotify:track:"},
@@ -312,6 +326,71 @@ func TestFindRebuildsNeteaseURLs(t *testing.T) {
 	}
 }
 
+// TestFindPassesThroughPageURLsAfterNarrowing covers the third mechanism. A
+// SoundCloud or Mixcloud page has no id to rebuild from, so the path itself is
+// republished — after its host is checked against the allowlist, its segment
+// count is fixed at two, both segments are held to a bare charset, and the
+// query and the fragment are dropped entirely.
+func TestFindPassesThroughPageURLsAfterNarrowing(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want Link
+	}{
+		{
+			name: "soundcloud page",
+			path: "https://soundcloud.com/artist/song",
+			want: Link{Provider: "SoundCloud", URL: "https://soundcloud.com/artist/song"},
+		},
+		{
+			name: "the query is dropped",
+			path: "https://soundcloud.com/artist/song?in=other/sets&si=abc",
+			want: Link{Provider: "SoundCloud", URL: "https://soundcloud.com/artist/song"},
+		},
+		{
+			name: "the mobile host is normalised",
+			path: "https://m.soundcloud.com/artist/song",
+			want: Link{Provider: "SoundCloud", URL: "https://soundcloud.com/artist/song"},
+		},
+		{
+			name: "the uppercase host is normalised",
+			path: "https://SOUNDCLOUD.COM/artist/song",
+			want: Link{Provider: "SoundCloud", URL: "https://soundcloud.com/artist/song"},
+		},
+		{
+			name: "an underscore is a slug character",
+			path: "https://soundcloud.com/ac_dc/back_in_black",
+			want: Link{Provider: "SoundCloud", URL: "https://soundcloud.com/ac_dc/back_in_black"},
+		},
+		{
+			name: "mixcloud page",
+			path: "https://www.mixcloud.com/artist/show",
+			want: Link{Provider: "Mixcloud", URL: "https://www.mixcloud.com/artist/show"},
+		},
+		{
+			name: "mixcloud trailing slash is normalised away",
+			path: "https://www.mixcloud.com/artist/show/",
+			want: Link{Provider: "Mixcloud", URL: "https://www.mixcloud.com/artist/show"},
+		},
+		{
+			name: "the fragment is dropped",
+			path: "https://www.mixcloud.com/artist/show#t=1m",
+			want: Link{Provider: "Mixcloud", URL: "https://www.mixcloud.com/artist/show"},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := Find(testCase.path)
+			if !ok {
+				t.Fatalf("Find(%q) ok=false; want a link", testCase.path)
+			}
+			if got != testCase.want {
+				t.Fatalf("Find(%q) = %+v; want %+v", testCase.path, got, testCase.want)
+			}
+		})
+	}
+}
+
 // TestArtistSearchEscapesTheName covers the one string this package composes
 // rather than translates: the artist name comes from metadata and can contain
 // separators that would otherwise break the route.
@@ -335,6 +414,11 @@ func TestArtistSearchEscapesTheName(t *testing.T) {
 			name: "YouTube Music",
 			path: "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
 			want: "https://music.youtube.com/search?q=AC%2FDC",
+		},
+		{
+			name: "SoundCloud",
+			path: "https://soundcloud.com/artist/song",
+			want: "https://soundcloud.com/search?q=AC%2FDC",
 		},
 	}
 	for _, testCase := range cases {
@@ -388,6 +472,8 @@ var linkablePaths = []struct {
 	{"tidal track", "tidal://track/123456789"},
 	{"yandex track", "yandex:track:12345678"},
 	{"netease song", "https://music.163.com/#/song?id=17241424"},
+	{"soundcloud page", "https://soundcloud.com/artist/song"},
+	{"mixcloud page", "https://www.mixcloud.com/artist/show"},
 }
 
 // routeLessProviders names the providers that deliberately have no artist
@@ -396,9 +482,10 @@ var linkablePaths = []struct {
 // provider named here still has to say why. Four of the five providers this
 // work links have no confirmed route, so this list starts empty and fills.
 var routeLessProviders = map[string]string{
-	tidalName:   "no search route confirmed; the artist falls back to Last.fm",
-	yandexName:  "no search route confirmed; the artist falls back to Last.fm",
-	neteaseName: "no search route confirmed; the artist falls back to Last.fm",
+	tidalName:    "no search route confirmed; the artist falls back to Last.fm",
+	yandexName:   "no search route confirmed; the artist falls back to Last.fm",
+	neteaseName:  "no search route confirmed; the artist falls back to Last.fm",
+	mixcloudName: "no search route confirmed; the artist falls back to Last.fm",
 }
 
 // TestEveryLinkableProviderHasAnArtistRoute is the guard that closes the one

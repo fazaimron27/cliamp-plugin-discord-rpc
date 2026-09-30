@@ -10,13 +10,17 @@ package tracklink
 // nowhere, which is what keeps a local filename and a credential-bearing
 // stream URL out of a Discord payload.
 //
-// The two mechanisms are different in kind:
+// The three mechanisms are different in kind, and each one guarantees less
+// than the one before it:
 //
 //   - URI translation: a spotify:track:<id> or tidal://track/<id> URI has no
 //     public form of its own, so it is translated into one.
 //   - URL rebuild: a YouTube watch URL or a NetEase page URL is already
 //     public, so it is published only after its host is checked and its
 //     identity rebuilt from the id.
+//   - Page pass-through: a SoundCloud or Mixcloud page has no id to rebuild
+//     from, because the path slug is the identity, so the path is republished
+//     after its host, its segment count and its segments are checked.
 //
 // Both are allowlists. A blocklist would fail open the moment a provider is
 // added or a rule is missed, and five of Cliamp's providers already put a live
@@ -35,6 +39,8 @@ const (
 	tidalName        = "Tidal"
 	yandexName       = "Yandex Music"
 	neteaseName      = "NetEase"
+	soundcloudName   = "SoundCloud"
+	mixcloudName     = "Mixcloud"
 
 	spotifyTrackPrefix   = "spotify:track:"
 	spotifyEpisodePrefix = "spotify:episode:"
@@ -45,6 +51,8 @@ const (
 	youtubeMusicHost = "music.youtube.com"
 	youtuBeHost      = "youtu.be"
 	neteaseHost      = "music.163.com"
+	soundcloudHost   = "soundcloud.com"
+	mixcloudHost     = "mixcloud.com"
 
 	// videoIDLength is the only length a YouTube video id has. Requiring it is
 	// what makes "v=short" a refusal rather than a published link.
@@ -89,6 +97,9 @@ func Find(path string) (Link, bool) {
 		return link, true
 	}
 	if link, ok := fromNeteaseURL(path); ok {
+		return link, true
+	}
+	if link, ok := fromPageURL(path); ok {
 		return link, true
 	}
 	return Link{}, false
@@ -249,6 +260,120 @@ func neteaseSongID(id string) (string, bool) {
 	return id, true
 }
 
+// pageProviders is the pass-through mechanism's allowlist: the hosts whose
+// page URL is itself the track's identity, the name and canonical host to
+// publish, and the path segments that are one of the provider's own tabs or
+// namespaces rather than a track. A segment count alone does not draw that
+// line — soundcloud.com/<user>/tracks is a profile tab and is two segments
+// too — so the reserved words do, which is how yt-dlp draws it as well.
+var pageProviders = []struct {
+	host           string
+	provider       string
+	canonicalHost  string
+	reservedFirst  []string
+	reservedSecond []string
+}{
+	{
+		host:          soundcloudHost,
+		provider:      soundcloudName,
+		canonicalHost: soundcloudHost,
+		reservedFirst: []string{"stations"},
+		reservedSecond: []string{
+			"tracks", "albums", "sets", "reposts", "likes", "spotlight",
+			"comments",
+		},
+	},
+	{
+		host:          mixcloudHost,
+		provider:      mixcloudName,
+		canonicalHost: "www." + mixcloudHost,
+		reservedSecond: []string{
+			"stream", "uploads", "favorites", "listens", "playlists",
+		},
+	},
+}
+
+// fromPageURL handles the pass-through mechanism. The published URL is built
+// from the two validated segments rather than from the raw path, so a query, a
+// fragment, a percent-encoding and a credential in the authority all have
+// nowhere to sit. What it cannot construct is the segments themselves, which
+// the provider chose — that is the whole of why this mechanism guarantees less
+// than the two above it.
+func fromPageURL(path string) (Link, bool) {
+	parsed, err := url.Parse(path)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+		return Link{}, false
+	}
+	host := normaliseHost(parsed.Hostname())
+	for _, provider := range pageProviders {
+		if provider.host != host {
+			continue
+		}
+		first, second, ok := pageSegments(parsed)
+		if !ok {
+			return Link{}, false
+		}
+		if containsString(provider.reservedFirst, first) {
+			return Link{}, false
+		}
+		if containsString(provider.reservedSecond, second) {
+			return Link{}, false
+		}
+		return Link{
+			Provider: provider.provider,
+			URL: "https://" + provider.canonicalHost + "/" + first +
+				"/" + second,
+		}, true
+	}
+	return Link{}, false
+}
+
+// pageSegments splits a page path into the two segments that identify a track.
+// Exactly two is the rule, and it is what refuses a SoundCloud set —
+// soundcloud.com/<user>/sets/<slug> — which the reserved-word check alone
+// would not catch.
+func pageSegments(parsed *url.URL) (first, second string, ok bool) {
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) != 2 {
+		return "", "", false
+	}
+	if !isSlug(segments[0]) || !isSlug(segments[1]) {
+		return "", "", false
+	}
+	return segments[0], segments[1], true
+}
+
+// isSlug reports whether segment is a bare path identifier. The charset is
+// narrower than either provider's own, because this mechanism republishes a
+// string the provider chose and the accept-list is therefore the whole
+// guarantee. Path is the decoded path, so holding to a bare charset is also
+// what refuses an escape: %20 would arrive as a space, and %2F as a separator.
+// A dot is outside the charset, which is what keeps ".." out with it.
+func isSlug(segment string) bool {
+	if segment == "" {
+		return false
+	}
+	for _, character := range segment {
+		if isASCIIAlphanumeric(character) {
+			continue
+		}
+		if character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// containsString reports whether values holds wanted.
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 // Artwork returns the public thumbnail for a video path, and false for every
 // path this package will not link.
 //
@@ -330,6 +455,9 @@ var artistSearchRoutes = map[string]func(string) string{
 	},
 	youtubeMusicName: func(name string) string {
 		return "https://music.youtube.com/search?q=" + url.QueryEscape(name)
+	},
+	soundcloudName: func(name string) string {
+		return "https://soundcloud.com/search?q=" + url.QueryEscape(name)
 	},
 }
 
