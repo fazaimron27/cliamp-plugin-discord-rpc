@@ -12,8 +12,8 @@ package tracklink
 //
 // The two mechanisms are different in kind:
 //
-//   - URI translation: a spotify:track:<id> URI has no public form of its own,
-//     so it is translated into one.
+//   - URI translation: a spotify:track:<id> or tidal://track/<id> URI has no
+//     public form of its own, so it is translated into one.
 //   - URL pass-through: a YouTube watch URL is already public, so it is
 //     published only after its host is checked and its identity rebuilt.
 //
@@ -31,9 +31,13 @@ const (
 	spotifyName      = "Spotify"
 	youtubeName      = "YouTube"
 	youtubeMusicName = "YouTube Music"
+	tidalName        = "Tidal"
+	yandexName       = "Yandex Music"
 
 	spotifyTrackPrefix   = "spotify:track:"
 	spotifyEpisodePrefix = "spotify:episode:"
+	tidalTrackPrefix     = "tidal://track/"
+	yandexTrackPrefix    = "yandex:track:"
 
 	youtubeHost      = "youtube.com"
 	youtubeMusicHost = "music.youtube.com"
@@ -68,7 +72,7 @@ func Find(path string) (Link, bool) {
 	if path == "" {
 		return Link{}, false
 	}
-	if link, ok := fromSpotifyURI(path); ok {
+	if link, ok := fromURIPrefix(path); ok {
 		return link, true
 	}
 	if link, ok := fromVideoURL(path); ok {
@@ -77,25 +81,38 @@ func Find(path string) (Link, bool) {
 	return Link{}, false
 }
 
-// fromSpotifyURI translates a Spotify URI into its public page. The id is
-// charset-checked before it is placed in the URL, which is what keeps a path
-// traversal or a query string from being carried through.
-func fromSpotifyURI(path string) (Link, bool) {
-	candidates := []struct{ prefix, kind string }{
-		{spotifyTrackPrefix, "track"},
-		{spotifyEpisodePrefix, "episode"},
-	}
-	for _, candidate := range candidates {
-		id, found := strings.CutPrefix(path, candidate.prefix)
+// uriTranslations is the translation mechanism's allowlist: the opaque prefix
+// a provider hands over, the provider it belongs to, the page it is translated
+// into, and the check its id has to pass. A prefix that matches and an id that
+// fails is a refusal rather than a reason to try the next entry, which is what
+// keeps spotify:track:abc?x=1 from reaching a looser row below it.
+var uriTranslations = []struct {
+	prefix   string
+	provider string
+	page     string
+	validID  func(string) bool
+}{
+	{spotifyTrackPrefix, spotifyName, "https://open.spotify.com/track/%s", isSpotifyID},
+	{spotifyEpisodePrefix, spotifyName, "https://open.spotify.com/episode/%s", isSpotifyID},
+	{tidalTrackPrefix, tidalName, "https://tidal.com/browse/track/%s", isNumericID},
+	{yandexTrackPrefix, yandexName, "https://music.yandex.ru/track/%s", isNumericID},
+}
+
+// fromURIPrefix translates a provider URI into its public page. The id is
+// checked before it is placed in the URL, which is what keeps a path traversal
+// or a query string from being carried through.
+func fromURIPrefix(path string) (Link, bool) {
+	for _, translation := range uriTranslations {
+		id, found := strings.CutPrefix(path, translation.prefix)
 		if !found {
 			continue
 		}
-		if !isSpotifyID(id) {
+		if !translation.validID(id) {
 			return Link{}, false
 		}
 		return Link{
-			Provider: spotifyName,
-			URL:      "https://open.spotify.com/" + candidate.kind + "/" + id,
+			Provider: translation.provider,
+			URL:      fmt.Sprintf(translation.page, id),
 		}, true
 	}
 	return Link{}, false
@@ -110,6 +127,22 @@ func isSpotifyID(id string) bool {
 	}
 	for _, character := range id {
 		if !isASCIIAlphanumeric(character) {
+			return false
+		}
+	}
+	return true
+}
+
+// isNumericID reports whether id is a bare Tidal or Yandex identifier, which
+// are decimal. It is also what refuses the ":albumId" suffix a Yandex path can
+// carry: client.plainID strips that from *like* ids and toPlaylistTracks never
+// applies it, so a colon can reach the path, and a colon is not a digit.
+func isNumericID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, character := range id {
+		if character < '0' || character > '9' {
 			return false
 		}
 	}

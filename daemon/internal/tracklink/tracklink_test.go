@@ -27,8 +27,12 @@ var refusedPaths = []struct {
 	{"jellyfin stream carries an api key", "https://jf.example.com/media/Items/track-1/Download?api_key=new-token"},
 	{"audiobookshelf stream carries a token", "https://abs.example.com/api/items/i1/file/1?token=auth"},
 	{"radio stream has no stable identity", "https://stream.example.com/live.mp3"},
-	{"deferred tidal", "tidal://track/12345"},
-	{"deferred yandex", "yandex:track:12345"},
+	{"tidal with no id", "tidal://track/"},
+	{"tidal with a non-numeric id", "tidal://track/abc"},
+	{"tidal album is not a track", "tidal://album/12345"},
+	{"yandex with no id", "yandex:track:"},
+	{"yandex with a non-numeric id", "yandex:track:abc"},
+	{"yandex with an album suffix is refused", "yandex:track:123:456"},
 	{"lyrion is self-hosted", "lyrion://track/12345"},
 	{"netease is an spa fragment", "https://music.163.com/#/song?id=12345"},
 	{"soundcloud is deferred", "https://soundcloud.com/artist/song"},
@@ -156,9 +160,10 @@ func TestFindNeverPublishesACredentialSubstring(t *testing.T) {
 	}
 }
 
-// TestFindTranslatesSpotifyURIs covers the URI mechanism: an opaque
-// spotify:track:<id> has no public form of its own, so it is translated.
-func TestFindTranslatesSpotifyURIs(t *testing.T) {
+// TestFindTranslatesOpaqueURIs covers the translation mechanism: a URI with no
+// public form of its own — spotify:track:<id>, tidal://track/<id>,
+// yandex:track:<id> — is translated into one after its id is checked.
+func TestFindTranslatesOpaqueURIs(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
@@ -173,6 +178,16 @@ func TestFindTranslatesSpotifyURIs(t *testing.T) {
 			name: "spotify episode",
 			path: "spotify:episode:512ojhOuo1ktJprKbVcKyQ",
 			want: Link{Provider: "Spotify", URL: "https://open.spotify.com/episode/512ojhOuo1ktJprKbVcKyQ"},
+		},
+		{
+			name: "tidal track",
+			path: "tidal://track/123456789",
+			want: Link{Provider: "Tidal", URL: "https://tidal.com/browse/track/123456789"},
+		},
+		{
+			name: "yandex track",
+			path: "yandex:track:12345678",
+			want: Link{Provider: "Yandex Music", URL: "https://music.yandex.ru/track/12345678"},
 		},
 	}
 	for _, testCase := range cases {
@@ -319,6 +334,8 @@ var linkablePaths = []struct {
 	{"spotify episode", "spotify:episode:512ojhOuo1ktJprKbVcKyQ"},
 	{"youtube watch", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
 	{"youtube music watch", "https://music.youtube.com/watch?v=dQw4w9WgXcQ"},
+	{"tidal track", "tidal://track/123456789"},
+	{"yandex track", "yandex:track:12345678"},
 }
 
 // routeLessProviders names the providers that deliberately have no artist
@@ -326,7 +343,10 @@ var linkablePaths = []struct {
 // guard: a provider that is neither routed nor named here fails it, and a
 // provider named here still has to say why. Four of the five providers this
 // work links have no confirmed route, so this list starts empty and fills.
-var routeLessProviders = map[string]string{}
+var routeLessProviders = map[string]string{
+	tidalName:  "no search route confirmed; the artist falls back to Last.fm",
+	yandexName: "no search route confirmed; the artist falls back to Last.fm",
+}
 
 // TestEveryLinkableProviderHasAnArtistRoute is the guard that closes the one
 // direction the two tables could drift in. The artist search test drives Find
