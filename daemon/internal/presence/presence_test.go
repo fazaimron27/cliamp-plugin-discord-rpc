@@ -180,10 +180,13 @@ func TestPresenceFallsBackToTheLastFmPages(t *testing.T) {
 	}
 }
 
-// The artist follows its own precedence, and every tier but the first needs
-// neither a key nor an id — so the artist link is available in more cases than
-// the track link, including for a stream and for a track with no provider path
-// at all.
+// The artist follows the track's destination wherever it can. A provider link
+// is the service the listener is actually playing from, so its search outranks
+// the exact Last.fm artist page: a card whose button reads "View on Spotify"
+// and whose artist opens Last.fm is pointing two ways at once. The Last.fm page
+// takes over for the tracks no provider claims, and the Last.fm search covers
+// everything else — so every tier but the last needs neither a key nor an id,
+// and the artist stays linkable in more cases than the track is.
 func TestPresenceArtistLinkPrecedence(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -192,20 +195,20 @@ func TestPresenceArtistLinkPrecedence(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "the exact Last.fm artist page wins over a provider search",
+			name:  "the provider search wins over the exact Last.fm artist page",
 			state: playback.State{Status: "playing", Artist: "Artist"},
 			links: presence.Links{
 				Provider:        "Spotify",
 				ArtistSearchURL: "https://open.spotify.com/search/Artist",
 				ArtistURL:       "https://www.last.fm/music/Artist",
 			},
-			want: "https://www.last.fm/music/Artist",
+			want: "https://open.spotify.com/search/Artist",
 		},
 		{
-			name:  "the provider search is used when there is no artist page",
+			name:  "the exact Last.fm artist page is used when no provider link was derived",
 			state: playback.State{Status: "playing", Artist: "Artist"},
-			links: presence.Links{Provider: "Spotify", ArtistSearchURL: "https://open.spotify.com/search/Artist"},
-			want:  "https://open.spotify.com/search/Artist",
+			links: presence.Links{ArtistURL: "https://www.last.fm/music/Artist"},
+			want:  "https://www.last.fm/music/Artist",
 		},
 		{
 			name:  "the Last.fm search is the final fallback",

@@ -139,20 +139,30 @@ func trackPage(links Links) string {
 	return links.TrackURL
 }
 
-// artistPage is the artist link, by a precedence of its own. An exact artist
-// page is the only tier that needs anything the name cannot supply — which is
-// why the artist is linkable in more cases than the track is: the provider
-// search and the Last.fm search need neither a key nor an id.
+// artistPage is the artist link, by a precedence of its own: the provider's
+// own search first, then the exact Last.fm artist page, then the Last.fm search.
+//
+// The provider outranks the exact page on purpose. A provider link means the
+// listener is playing from that service, and its search is the page they can do
+// something with; the Last.fm artist page is the better link only for a track
+// no provider claims. Ordering this the other way would put the artist on
+// Last.fm whenever the key was configured, which is nearly always, leaving the
+// provider tier to run for almost nobody — and pointing the artist somewhere
+// other than the title and the button beside it.
+//
+// Only the first tier needs an id, and no artist id exists anywhere in the
+// pipeline, so the artist is linkable in more cases than the track is: the
+// provider search and the Last.fm search need neither a key nor an id.
 func artistPage(s playback.State, links Links) string {
 	name := strings.TrimSpace(s.Artist)
 	if name == "" {
 		return ""
 	}
-	if links.ArtistURL != "" {
-		return links.ArtistURL
-	}
 	if links.ArtistSearchURL != "" {
 		return links.ArtistSearchURL
+	}
+	if links.ArtistURL != "" {
+		return links.ArtistURL
 	}
 	query := url.Values{}
 	query.Set("q", name)

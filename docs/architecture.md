@@ -264,10 +264,17 @@ providers off the card.
 
 The artist follows a different precedence, because no artist id exists anywhere
 in the pipeline: providers do not hand one to a plugin, and `ProviderMeta` never
-crosses that boundary. So the artist links to the exact artist page when Last.fm
-supplies one, otherwise to the provider's own artist search for that name,
-otherwise to Last.fm's — which makes the artist linkable in more cases than the
-track is, since the last two tiers need neither a key nor an id.
+crosses that boundary. So the artist links to the provider's own artist search
+for that name when the path identified one, otherwise to the exact artist page
+when Last.fm supplies one, otherwise to Last.fm's search — which makes the
+artist linkable in more cases than the track is, since the last two tiers need
+neither a key nor an id.
+
+The provider search outranks the exact page deliberately. A provider link means
+the listener is playing from that service, and the artist should not point
+somewhere other than the title and the button beside it. Ordering these the
+other way round would leave the provider tier unreachable for anyone with a
+Last.fm key, since a successful lookup returns an artist page almost every time.
 
 ## Failure Handling
 
