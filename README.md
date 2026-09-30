@@ -239,7 +239,7 @@ service. A Tidal, Yandex Music, NetEase or Mixcloud track keeps its page and
 its button, and leaves the artist to Last.fm — its exact artist page when a key
 resolves one, and the search otherwise.
 
-Every provider Cliamp supports, and what the card does with it:
+The providers Cliamp offers, and what the card does with each:
 
 | Provider | Artwork | Track link | Artist link |
 | --- | --- | --- | --- |
