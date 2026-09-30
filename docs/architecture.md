@@ -155,7 +155,8 @@ cliamp-plugin-discord-rpc/
 │       ├── discord/
 │       ├── playback/
 │       ├── presence/
-│       └── statewatch/
+│       ├── statewatch/
+│       └── tracklink/
 ├── docs/
 ├── discord-rpc.lua
 ├── install.sh
@@ -184,6 +185,10 @@ cliamp-plugin-discord-rpc/
   and public presence keys.
 - `daemon/internal/presence` builds typed Discord Listening activities.
 - `daemon/internal/artwork` resolves and caches album images from Last.fm.
+- `daemon/internal/tracklink` maps a playback path to the public page it belongs
+  to. It holds no network and no dependency beyond the standard library, because
+  every value it is handed comes from a provider or a player: it is a refusal
+  machine first, and a path it does not recognise is published nowhere.
 - `daemon/internal/discord` implements socket discovery, framing, handshake,
   and `SET_ACTIVITY` over Discord IPC.
 - `daemon/internal/daemon` coordinates subscriptions, artwork, timelines,
@@ -212,13 +217,16 @@ what stops that document from holding the card indefinitely.
 ## Artwork
 
 The daemon calls Last.fm `track.getInfo` with artist and title and selects the
-largest valid HTTPS image. What a lookup found is remembered with an expiry: a
-resolved URL is reused for an hour, while an answer carrying no image is retried
-after 30 seconds. A track's artwork does not change while it plays, but whether
-Last.fm could supply it can, so a transient miss outlives nothing and the
-resolver does not accumulate a lookup for every track the daemon has ever seen.
-A missing API key, failed lookup, or absent image falls back to the Discord
-application asset configured by `--large-image`.
+largest valid HTTPS image. The same response carries the track's own page and
+its artist's page, which the resolver returns alongside the image: reading them
+costs no request the artwork did not already make. What a lookup found is
+remembered with an expiry: an entry naming an image is reused for an hour, while
+an answer carrying no image is retried after 30 seconds. A track's artwork does
+not change while it plays, but whether Last.fm could supply it can, so a
+transient miss outlives nothing and the resolver does not accumulate a lookup
+for every track the daemon has ever seen. A missing API key, failed lookup, or
+absent image falls back to the Discord application asset configured by
+`--large-image`.
 
 Lookups run on their own goroutine, and the loop publishes a Listening activity
 as soon as it knows the track — with artwork when the answer is already in hand,
@@ -229,8 +237,60 @@ timeout.
 
 The community-maintained default Discord application ID is used unless a custom
 ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
-`plugins.discord-rpc.app_id`. Last.fm artwork is enabled only when a
-`lastfm_api_key` is supplied.
+`plugins.discord-rpc.app_id`.
+
+Last.fm is consulted only when a `lastfm_api_key` is supplied, and the resolver
+returns before any request when it is absent, so a keyless daemon makes no
+lookup at all. That withholds both the artwork and the exact track and artist
+pages, since one response carries all three. The pages are never constructed
+from the artist and title instead: Last.fm's own slug rules fold case and
+rewrite punctuation, so a built URL is correct for most tracks and quietly wrong
+for the rest, which is the failure `internal/tracklink` exists to refuse. The
+card falls back to a Last.fm search, which needs no key.
+
+## Card Links
+
+The title, the artist, and the album art are links when the daemon knows where
+they should point, and the first button is labelled for its destination so the
+card never promises Last.fm and then opens Spotify. None of this costs a
+request: each URL is either already in the payload or a string parse of it.
+
+The track link is the provider's own page when the playback path identifies one,
+otherwise the Last.fm page from the same lookup that supplied the artwork,
+otherwise nothing — the title is not linked to a search page. The title and the
+artwork share this link, so the artwork is clickable whether the image above it
+is the track's own art or the fallback asset: keying that on "is there album
+art" would leave the artwork inert for everyone without a Last.fm key, and on
+every track Last.fm has no image for.
+
+The button falls back one step further, to the Last.fm search, and is dropped
+only when there is no artist and title to search for. It is not withheld from a
+stream: whatever is playing has a name, the search works from a name alone, and
+withholding it made the same stream show a different card depending on whether a
+Last.fm key happened to be configured.
+
+`internal/tracklink` owns the path-to-URL mapping, and both of its mechanisms
+are allowlists. A `spotify:track:` URI is translated into a public page after
+its id is charset-checked. A YouTube watch URL is checked against a host
+allowlist and then **rebuilt from the video id**, so `list=`, `index=` and `t=`
+cannot ride along and the host that is published is one this daemon
+constructed. A path matching neither is published nowhere, which is what keeps a
+local filename and the credential-bearing stream URLs of the five self-hosted
+providers off the card.
+
+The artist follows a different precedence, because no artist id exists anywhere
+in the pipeline: providers do not hand one to a plugin, and `ProviderMeta` never
+crosses that boundary. So the artist links to the provider's own artist search
+for that name when the path identified one, otherwise to the exact artist page
+when Last.fm supplies one, otherwise to Last.fm's search — which makes the
+artist linkable in more cases than the track is, since the last two tiers need
+neither a key nor an id.
+
+The provider search outranks the exact page deliberately. A provider link means
+the listener is playing from that service, and the artist should not point
+somewhere other than the title and the button beside it. Ordering these the
+other way round would leave the provider tier unreachable for anyone with a
+Last.fm key, since a successful lookup returns an artist page almost every time.
 
 ## Failure Handling
 

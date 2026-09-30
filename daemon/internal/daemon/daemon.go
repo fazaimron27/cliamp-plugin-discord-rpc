@@ -26,6 +26,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/tracklink"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -105,15 +106,49 @@ type discordClient interface {
 }
 
 type artworkResolver interface {
-	Resolve(context.Context, string, string) (string, error)
+	Resolve(context.Context, string, string) (artwork.TrackInfo, error)
 }
 
 // artworkResult is a lookup's outcome, tagged with the track it was asked about
 // so the loop can discard an answer that arrived after the track changed.
 type artworkResult struct {
 	track string
-	image string
+	info  artwork.TrackInfo
 	err   error
+}
+
+// republishKey is what decides whether the card is re-sent. It covers the
+// snapshot's public identity, the resolved artwork, and the derived links.
+//
+// The links belong here because the provider link is derived from the playback
+// path, and PresenceKey deliberately excludes the path. A path change also
+// re-anchors the timeline, so this is defence against a future PresenceKey
+// rather than a fix for an observable bug today — but the republish is
+// conditional on this value and the links are a real input to the payload, so
+// the two are kept in step by construction.
+func republishKey(state playback.State, info artwork.TrackInfo, links presence.Links) string {
+	return state.PresenceKey() + "\x00" + info.Image + "\x00" + links.Key()
+}
+
+// linksFor gathers every public URL a snapshot resolves to: the pages Last.fm
+// reported, and the provider page the playback path identifies.
+//
+// The provider half is a pure string parse of a value the daemon already holds,
+// so deriving it here costs nothing and adds no request. A path matching no
+// allowlist yields no provider link at all, which is what keeps a local
+// filename and a credential-bearing stream URL out of the payload.
+func linksFor(state playback.State, info artwork.TrackInfo) presence.Links {
+	links := presence.Links{TrackURL: info.TrackURL, ArtistURL: info.ArtistURL}
+	link, ok := tracklink.Find(state.Path)
+	if !ok {
+		return links
+	}
+	links.Provider = link.Provider
+	links.ProviderURL = link.URL
+	if search, ok := link.ArtistSearch(state.Artist); ok {
+		links.ArtistSearchURL = search
+	}
+	return links
 }
 
 type timelineTracker struct {
@@ -223,13 +258,13 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 
 	resolved := make(chan artworkResult, 1)
 	var artworkTrack string
-	var artworkImage string
+	var artworkInfo artwork.TrackInfo
 
 	requestArtwork := func(track, artist, title string) {
 		go func() {
-			image, err := resolver.Resolve(ctx, artist, title)
+			info, err := resolver.Resolve(ctx, artist, title)
 			select {
-			case resolved <- artworkResult{track: track, image: image, err: err}:
+			case resolved <- artworkResult{track: track, info: info, err: err}:
 			case <-ctx.Done():
 			}
 		}()
@@ -286,12 +321,13 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		track := lastState.TrackKey()
 		if track != artworkTrack {
 			artworkTrack = track
-			artworkImage = ""
+			artworkInfo = artwork.TrackInfo{}
 			requestArtwork(track, lastState.Artist, lastState.Title)
 		}
-		image := artworkImage
+		info := artworkInfo
+		links := linksFor(lastState, info)
 		currentTime := now()
-		desiredKey := lastState.PresenceKey() + "\x00" + image
+		desiredKey := republishKey(lastState, info, links)
 		if desiredKey == publishedKey && client.Connected() && currentTime.Sub(publishedAt) < refresh {
 			reset(refreshTimer, refresh-currentTime.Sub(publishedAt))
 			return
@@ -300,7 +336,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			reset(refreshTimer, time.Second)
 			return
 		}
-		activity := presence.Build(lastState, presence.Options{LargeImage: cfg.LargeImage, LargeText: cfg.LargeText}, image, currentTime)
+		activity := presence.Build(lastState, presence.Options{LargeImage: cfg.LargeImage, LargeText: cfg.LargeText}, info.Image, links, currentTime)
 		if err := client.SetActivity(activity); err != nil {
 			log.Printf("update Discord presence: %v", err)
 			_ = client.Close()
@@ -359,10 +395,10 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			if result.err != nil {
 				log.Printf("resolve Last.fm artwork: %v", result.err)
 			}
-			artworkImage = result.image
+			artworkInfo = result.info
 			reconcile()
 		case <-refreshTimer.C:
-			if artworkImage == "" && lastState.IsPlaying() {
+			if artworkInfo.Image == "" && lastState.IsPlaying() {
 				requestArtwork(artworkTrack, lastState.Artist, lastState.Title)
 			}
 			reconcile()

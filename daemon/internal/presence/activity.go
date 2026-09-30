@@ -24,8 +24,9 @@ const (
 
 	getCliampLabel = "Get Cliamp"
 	getCliampURL   = "https://www.cliamp.stream/"
-	trackLabel     = "View on Last.fm"
-	trackSearchURL = "https://www.last.fm/search"
+	lastFMName     = "Last.fm"
+	lastFMSearch   = "https://www.last.fm/search"
+	viewOnPrefix   = "View on "
 )
 
 var getCliampButton = Button{Label: getCliampLabel, URL: getCliampURL}
@@ -36,11 +37,48 @@ type Options struct {
 	LargeText  string
 }
 
+// Links are the public URLs a snapshot resolves to, gathered so the payload
+// builder only has to place them.
+//
+// An empty field is the absence of a link, not a link to nowhere: the field it
+// would fill is left out of the payload entirely. Discord validates these
+// fields for URI syntax alone and rejects the whole activity when one is
+// malformed, so a value that is not known to be a URL must never be sent.
+type Links struct {
+	// Provider names the service ProviderURL belongs to, and becomes the button
+	// label. It is empty when the playback path matched no allowlist.
+	Provider string
+	// ProviderURL is that service's own page for the track, derived from the
+	// playback path.
+	ProviderURL string
+	// ArtistSearchURL is that service's artist search for this artist's name.
+	// No artist ID exists anywhere in the pipeline, so a provider track can
+	// offer a search but never an exact artist page.
+	ArtistSearchURL string
+	// TrackURL and ArtistURL are the pages Last.fm reported for the track and
+	// its artist. They arrive with the artwork, so they cost no extra request.
+	TrackURL  string
+	ArtistURL string
+}
+
+// Key renders the links for comparison, so that a change to any one of them
+// republishes the card.
+//
+// It exists because the provider link is derived from the playback path, and
+// PresenceKey deliberately excludes the path: without a key that covers the
+// derived URLs, a change that altered only the path would leave the previous
+// provider's link on the card.
+func (l Links) Key() string {
+	return strings.Join([]string{l.Provider, l.ProviderURL, l.ArtistSearchURL, l.TrackURL, l.ArtistURL}, "\x00")
+}
+
 // Activity is the SET_ACTIVITY payload sent to Discord.
 type Activity struct {
 	Type              int         `json:"type"`
 	Details           string      `json:"details"`
 	State             string      `json:"state"`
+	DetailsURL        string      `json:"details_url,omitempty"`
+	StateURL          string      `json:"state_url,omitempty"`
 	StatusDisplayType int         `json:"status_display_type"`
 	Instance          bool        `json:"instance"`
 	Assets            *Assets     `json:"assets,omitempty"`
@@ -48,21 +86,92 @@ type Activity struct {
 	Buttons           []Button    `json:"buttons,omitempty"`
 }
 
-// buttons returns the CTA pair for a snapshot: a track link when the metadata
-// identifies a song, then the app link. Discord renders at most two buttons,
-// and a stream carries no stable track identity to look up.
-func buttons(s playback.State) []Button {
+// buttons returns the CTA pair for a snapshot: a track link when one was
+// resolved, then the app link. Discord renders at most two buttons.
+func buttons(s playback.State, links Links) []Button {
+	if target, name := trackTarget(s, links); target != "" {
+		return []Button{{Label: viewOnPrefix + name, URL: target}, getCliampButton}
+	}
+	return []Button{getCliampButton}
+}
+
+// trackTarget returns the URL the track button opens and the name to label it
+// with. The provider's own page wins whenever the path yielded one, then the
+// Last.fm track page, then Last.fm search.
+//
+// The label has to move with the destination: a fixed "View on Last.fm" would
+// be wrong on every provider track, and wrong in the way the reader cannot
+// detect from the card.
+//
+// Search stays as the last tier on purpose. It is the only one that works with
+// neither a key nor a recognised path, so dropping it would leave anyone
+// without a Last.fm key with no track button at all.
+//
+// There is deliberately no stream check. There used to be one, and it made the
+// button depend on whether a Last.fm key was configured: a stream reached the
+// Last.fm page tier whenever a key supplied a page, and only fell through to
+// the guard when it did not. Whatever is playing has a name, a name is all the
+// search tier needs, and YouTube — flagged as a stream because it plays through
+// yt-dlp — is a case where linking is plainly right. So the button is offered
+// to a stream on the same terms as to anything else.
+func trackTarget(s playback.State, links Links) (string, string) {
+	if links.ProviderURL != "" {
+		return links.ProviderURL, links.Provider
+	}
+	if links.TrackURL != "" {
+		return links.TrackURL, lastFMName
+	}
 	artist := strings.TrimSpace(s.Artist)
 	title := strings.TrimSpace(s.Title)
-	if s.Stream || artist == "" || title == "" {
-		return []Button{getCliampButton}
+	if artist == "" || title == "" {
+		return "", ""
 	}
 	query := url.Values{}
 	query.Set("q", artist+" "+title)
-	return []Button{
-		{Label: trackLabel, URL: trackSearchURL + "?" + query.Encode()},
-		getCliampButton,
+	return lastFMSearch + "?" + query.Encode(), lastFMName
+}
+
+// trackPage is the exact page for the track, which is what the title and the
+// artwork link to: the provider's own when the path yielded one, otherwise the
+// Last.fm track page.
+//
+// A search page is a button destination, not a link on the title, so this is
+// empty when neither exists.
+func trackPage(links Links) string {
+	if links.ProviderURL != "" {
+		return links.ProviderURL
 	}
+	return links.TrackURL
+}
+
+// artistPage is the artist link, by a precedence of its own: the provider's
+// own search first, then the exact Last.fm artist page, then the Last.fm search.
+//
+// The provider outranks the exact page on purpose. A provider link means the
+// listener is playing from that service, and its search is the page they can do
+// something with; the Last.fm artist page is the better link only for a track
+// no provider claims. Ordering this the other way would put the artist on
+// Last.fm whenever the key was configured, which is nearly always, leaving the
+// provider tier to run for almost nobody — and pointing the artist somewhere
+// other than the title and the button beside it.
+//
+// Only the first tier needs an id, and no artist id exists anywhere in the
+// pipeline, so the artist is linkable in more cases than the track is: the
+// provider search and the Last.fm search need neither a key nor an id.
+func artistPage(s playback.State, links Links) string {
+	name := strings.TrimSpace(s.Artist)
+	if name == "" {
+		return ""
+	}
+	if links.ArtistSearchURL != "" {
+		return links.ArtistSearchURL
+	}
+	if links.ArtistURL != "" {
+		return links.ArtistURL
+	}
+	query := url.Values{}
+	query.Set("q", name)
+	return lastFMSearch + "?" + query.Encode()
 }
 
 // Assets is the payload's asset object: the image Discord shows on the card
@@ -71,6 +180,7 @@ func buttons(s playback.State) []Button {
 type Assets struct {
 	LargeImage string `json:"large_image,omitempty"`
 	LargeText  string `json:"large_text,omitempty"`
+	LargeURL   string `json:"large_url,omitempty"`
 }
 
 // Timestamps is the payload's timeline object, in Unix seconds. Discord
@@ -91,27 +201,30 @@ type Button struct {
 // Build creates a Listening activity. StartedAt is derived from the plugin
 // event timestamp and playback position, so ordinary snapshots preserve the
 // progress timeline while seeks and resumes establish a new anchor.
-func Build(s playback.State, options Options, artworkURL string, now time.Time) *Activity {
+func Build(s playback.State, options Options, artworkURL string, links Links, now time.Time) *Activity {
 	artist := s.Artist
 	if strings.TrimSpace(artist) == "" {
 		artist = "Unknown artist"
 	}
+	track := trackPage(links)
 	activity := &Activity{
 		Type:              activityTypeListening,
 		Details:           truncateRunes(s.Title, maxDetailsRunes),
 		State:             truncateRunes(artist, maxStateRunes),
+		DetailsURL:        track,
+		StateURL:          artistPage(s, links),
 		StatusDisplayType: statusDisplayState,
-		Buttons:           buttons(s),
+		Buttons:           buttons(s, links),
 	}
 
 	if artworkURL != "" {
-		activity.Assets = &Assets{LargeImage: artworkURL, LargeText: truncate(s.Album, maxFieldBytes)}
+		activity.Assets = &Assets{LargeImage: artworkURL, LargeText: truncate(s.Album, maxFieldBytes), LargeURL: track}
 	} else if options.LargeImage != "" || s.Album != "" {
 		text := options.LargeText
 		if s.Album != "" {
 			text = s.Album
 		}
-		activity.Assets = &Assets{LargeImage: options.LargeImage, LargeText: truncate(text, maxFieldBytes)}
+		activity.Assets = &Assets{LargeImage: options.LargeImage, LargeText: truncate(text, maxFieldBytes), LargeURL: track}
 	}
 
 	if s.Status == "playing" && s.Duration > 0 {

@@ -37,11 +37,25 @@ const (
 	cacheTTL = time.Hour
 )
 
-// lookup is what the resolver knows about one track — an artwork URL, or the
-// absence of one — and when that stops being worth repeating.
+// lookup is what the resolver knows about one track — the public pages Last.fm
+// reported for it, or the absence of them — and when that stops being worth
+// repeating.
 type lookup struct {
-	image   string
+	info    TrackInfo
 	expires time.Time
+}
+
+// TrackInfo is what one Last.fm lookup yields: a public image URL and the
+// public pages for the track and its artist. An empty field means Last.fm
+// supplied nothing usable for it, which is not an error.
+//
+// The three arrive together in one response, so reading the two pages costs no
+// request the artwork did not already make. They are comparable, which is how
+// remember tells a real answer from an empty one.
+type TrackInfo struct {
+	Image     string
+	TrackURL  string
+	ArtistURL string
 }
 
 // live reports whether an entry is still worth serving. Serving and pruning ask
@@ -100,13 +114,19 @@ func NewLastFM(apiKey string, options ...Option) *LastFM {
 // remember records what a lookup found. An answer naming an image is held for
 // cacheTTL; an answer without one is retried after failureRetry, because it
 // describes a moment rather than the track.
-func (r *LastFM) remember(key, image string) {
+//
+// The expiry is keyed on the image rather than on "any field is set". That
+// keeps the request cadence exactly what it was before the two page URLs were
+// read: a response that carries pages but no artwork is still retried on the
+// retry window, so the URLs ride along on requests that were already going to
+// happen rather than causing new ones.
+func (r *LastFM) remember(key string, info TrackInfo) {
 	r.forget()
 	expires := r.now().Add(failureRetry)
-	if image != "" {
+	if info.Image != "" {
 		expires = r.now().Add(cacheTTL)
 	}
-	r.known[key] = lookup{image: image, expires: expires}
+	r.known[key] = lookup{info: info, expires: expires}
 }
 
 // forget drops every lookup that has expired, so the map holds only live
@@ -122,14 +142,16 @@ func (r *LastFM) forget() {
 	}
 }
 
-// Resolve returns the largest valid HTTPS image in Last.fm's response.
-func (r *LastFM) Resolve(ctx context.Context, artist, title string) (string, error) {
+// Resolve returns the public pages Last.fm reports for a track: the largest
+// valid HTTPS image, and the track and artist pages that arrive in the same
+// response.
+func (r *LastFM) Resolve(ctx context.Context, artist, title string) (TrackInfo, error) {
 	if r.apiKey == "" || strings.TrimSpace(artist) == "" || strings.TrimSpace(title) == "" {
-		return "", nil
+		return TrackInfo{}, nil
 	}
 	key := strings.ToLower(strings.TrimSpace(artist) + "\x00" + strings.TrimSpace(title))
 	if entry, ok := r.known[key]; ok && entry.live(r.now()) {
-		return entry.image, nil
+		return entry.info, nil
 	}
 
 	body, err := r.get(ctx, url.Values{
@@ -141,11 +163,15 @@ func (r *LastFM) Resolve(ctx context.Context, artist, title string) (string, err
 		"format":      {"json"},
 	})
 	if err != nil {
-		return "", r.failed(key, err)
+		return TrackInfo{}, r.failed(key, err)
 	}
 
 	var result struct {
 		Track struct {
+			URL    string `json:"url"`
+			Artist struct {
+				URL string `json:"url"`
+			} `json:"artist"`
 			Album struct {
 				Images []struct {
 					URL string `json:"#text"`
@@ -154,23 +180,42 @@ func (r *LastFM) Resolve(ctx context.Context, artist, title string) (string, err
 		} `json:"track"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", r.failed(key, fmt.Errorf("decode Last.fm response: %w", err))
+		return TrackInfo{}, r.failed(key, fmt.Errorf("decode Last.fm response: %w", err))
 	}
 	image := ""
 	for _, candidate := range result.Track.Album.Images {
-		parsed, err := url.Parse(candidate.URL)
-		if err == nil && parsed.Scheme == "https" && parsed.Host != "" {
-			image = candidate.URL
+		if valid := lastFMURL(candidate.URL); valid != "" {
+			image = valid
 		}
 	}
-	r.remember(key, image)
-	return image, nil
+	info := TrackInfo{
+		Image:     image,
+		TrackURL:  lastFMURL(result.Track.URL),
+		ArtistURL: lastFMURL(result.Track.Artist.URL),
+	}
+	r.remember(key, info)
+	return info, nil
+}
+
+// lastFMURL returns raw only when it is an HTTPS URL with a host, and an empty
+// string for anything else. Every URL in a response goes through this, so the
+// three fields are held to one rule.
+//
+// Discord rejects the entire activity when a single field is a malformed URL,
+// which would cost the card its artwork as well as the link. A value we cannot
+// vouch for is therefore dropped here, where dropping it costs nothing.
+func lastFMURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return ""
+	}
+	return raw
 }
 
 // failed remembers a lookup that produced no artwork and returns the error
 // unchanged for the caller to report.
 func (r *LastFM) failed(key string, err error) error {
-	r.remember(key, "")
+	r.remember(key, TrackInfo{})
 	return err
 }
 

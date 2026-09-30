@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
 	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
@@ -108,7 +109,9 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 
 type noArtwork struct{}
 
-func (noArtwork) Resolve(context.Context, string, string) (string, error) { return "", nil }
+func (noArtwork) Resolve(context.Context, string, string) (artwork.TrackInfo, error) {
+	return artwork.TrackInfo{}, nil
+}
 
 // serveCliampEvent performs the v2 handshake and publishes one snapshot carrying
 // the supplied plugin version, then holds the stream open until release closes.
@@ -486,16 +489,16 @@ func newGatedArtwork() *gatedArtwork {
 	return &gatedArtwork{entered: make(chan struct{}, 8), release: make(chan string, 8)}
 }
 
-func (g *gatedArtwork) Resolve(ctx context.Context, _, _ string) (string, error) {
+func (g *gatedArtwork) Resolve(ctx context.Context, _, _ string) (artwork.TrackInfo, error) {
 	select {
 	case g.entered <- struct{}{}:
 	default:
 	}
 	select {
 	case image := <-g.release:
-		return image, nil
+		return artwork.TrackInfo{Image: image}, nil
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return artwork.TrackInfo{}, ctx.Err()
 	}
 }
 
@@ -533,11 +536,11 @@ type countingArtwork struct {
 	image    string
 }
 
-func (c *countingArtwork) Resolve(context.Context, string, string) (string, error) {
+func (c *countingArtwork) Resolve(context.Context, string, string) (artwork.TrackInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.requests++
-	return c.image, nil
+	return artwork.TrackInfo{Image: c.image}, nil
 }
 
 func (c *countingArtwork) count() int {
@@ -665,5 +668,90 @@ func TestRunDoesNotAskAgainBecauseALookupCameBackEmpty(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if asked := artwork.count(); asked != 1 {
 		t.Fatalf("lookups = %d after settling, want 1: an answer asked for itself", asked)
+	}
+}
+
+// A provider path is the whole point of the design: it becomes a link with no
+// key and no network, and the artist gets that service's search because no
+// artist id exists anywhere in the pipeline to build an exact page from.
+func TestLinksForDerivesAProviderLinkAndArtistSearch(t *testing.T) {
+	state := playback.State{Title: "Track", Artist: "AC/DC", Path: "spotify:track:4uLU6hMCjMI75M1A2tKUQC"}
+	links := linksFor(state, artwork.TrackInfo{})
+
+	if links.Provider != "Spotify" || links.ProviderURL != "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC" {
+		t.Errorf("links = %+v; want the Spotify track page", links)
+	}
+	if links.ArtistSearchURL != "https://open.spotify.com/search/AC%2FDC" {
+		t.Errorf("ArtistSearchURL = %q; want the escaped Spotify search", links.ArtistSearchURL)
+	}
+}
+
+// The guard the provider-link design exists to satisfy. A self-hosted stream's
+// path is a live credential and a local track's is a filesystem path, so
+// neither may reach the card even in part. linksFor is the one place a path
+// becomes a public URL, which is why the assertion is made here rather than on
+// the payload builder alone.
+func TestLinksForNeverPublishesACredentialFromThePath(t *testing.T) {
+	cases := []struct {
+		name     string
+		path     string
+		mustMiss string
+	}{
+		{"navidrome password hash", "https://music.example.com/rest/stream?id=1&u=faza&t=deadbeef", "deadbeef"},
+		{"plex token", "https://plex.example.com/library/parts/9/file.flac?X-Plex-Token=secret-token", "secret-token"},
+		{"jellyfin api key", "https://jf.example.com/media/Items/track-1/Download?api_key=new-token", "new-token"},
+		{"audiobookshelf token", "https://abs.example.com/api/items/i1/file/1?token=auth-token", "auth-token"},
+		{"local filesystem path", "/home/faza/Music/AC-DC/Back in Black.flac", "Back in Black"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Path: testCase.path, Stream: true}
+			links := linksFor(state, artwork.TrackInfo{})
+			data, err := json.Marshal(presence.Build(state, presence.Options{}, "https://img/cover.jpg", links, time.Unix(1000, 0)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), testCase.mustMiss) {
+				t.Errorf("payload leaked %q from the path: %s", testCase.mustMiss, data)
+			}
+			if strings.Contains(string(data), testCase.path) {
+				t.Errorf("payload carries the whole path: %s", data)
+			}
+		})
+	}
+}
+
+// The card is re-sent only when republishKey changes, so the derived links have
+// to be part of it: the provider link comes from the playback path, and
+// PresenceKey deliberately excludes the path.
+//
+// This guards the key rather than the loop, and the distinction is deliberate.
+// The loop republishes on the keepalive interval whatever the key says, so a
+// missing input is masked in any end-to-end test — one that waits for the card
+// to be re-sent will see it re-sent either way. The property asserted here is
+// the one that actually matters: two snapshots with the same public identity
+// and different links must not share a key.
+func TestRepublishKeyCoversTheDerivedLinks(t *testing.T) {
+	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Duration: 200, StartedAt: 1000}
+	base := republishKey(state, artwork.TrackInfo{}, linksFor(state, artwork.TrackInfo{}))
+
+	if republishKey(state, artwork.TrackInfo{Image: "https://img/cover.jpg"}, presence.Links{}) == base {
+		t.Error("the artwork does not change the key")
+	}
+	cases := []struct {
+		name  string
+		links presence.Links
+	}{
+		{"provider track page", presence.Links{Provider: "Spotify", ProviderURL: "https://open.spotify.com/track/x"}},
+		{"provider artist search", presence.Links{Provider: "Spotify", ArtistSearchURL: "https://open.spotify.com/search/A"}},
+		{"Last.fm track page", presence.Links{TrackURL: "https://www.last.fm/music/A/_/T"}},
+		{"Last.fm artist page", presence.Links{ArtistURL: "https://www.last.fm/music/A"}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if republishKey(state, artwork.TrackInfo{}, testCase.links) == base {
+				t.Errorf("a changed %s does not change the republish key", testCase.name)
+			}
+		})
 	}
 }
