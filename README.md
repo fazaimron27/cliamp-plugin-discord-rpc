@@ -233,8 +233,10 @@ The key does two things, and the card works without it:
 
 Where a link cannot be resolved, the card falls back to a Last.fm **search**,
 which needs no key. So without one, a local track still offers a working search
-button and a clickable artist, while a Spotify or YouTube track is linked in
-full — its page, its artist, and its button all point at that service.
+button and a clickable artist, while a Spotify, YouTube or SoundCloud track is
+linked in full — its page, its artist, and its button all point at that
+service. A Tidal, Yandex Music, NetEase or Mixcloud track keeps its page and
+its button, and leaves the artist to Last.fm's exact page.
 
 ### Use a custom Discord application
 
