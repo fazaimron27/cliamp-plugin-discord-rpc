@@ -10,11 +10,6 @@ import (
 	"testing"
 )
 
-// TestFindRefusesEveryPathWeMustNotPublish is the guard that matters most. Each
-// case is a value a provider or a player has actually handed this daemon, and
-// every one of them must come back unlinked: a local filesystem path, a radio
-// stream with no stable identity, and above all the self-hosted stream URLs,
-// which carry a live credential in the path itself.
 // refusedPaths is the corpus every refusal guard in this package iterates. It
 // is one list rather than one per entry point on purpose: the property worth
 // holding is that a path Find refuses, Artwork refuses too, and that property
@@ -53,6 +48,11 @@ var refusedPaths = []struct {
 	{"youtube music over http is refused", "http://music.youtube.com/watch?v=dQw4w9WgXcQ"},
 }
 
+// TestFindRefusesEveryPathWeMustNotPublish is the guard that matters most. Each
+// case is a value a provider or a player has actually handed this daemon, and
+// every one of them must come back unlinked: a local filesystem path, a radio
+// stream with no stable identity, and above all the self-hosted stream URLs,
+// which carry a live credential in the path itself.
 func TestFindRefusesEveryPathWeMustNotPublish(t *testing.T) {
 	for _, testCase := range refusedPaths {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -299,5 +299,57 @@ func TestArtistSearchRefusesAnEmptyName(t *testing.T) {
 		if got, hasSearch := link.ArtistSearch(name); hasSearch {
 			t.Errorf("ArtistSearch(%q) = %q, true; want false", name, got)
 		}
+	}
+}
+
+// linkablePaths is one path per shape Find accepts. It is the accept side of
+// refusedPaths, and it exists for the guard below rather than for its own
+// assertions: every row must still be accepted, and the provider it yields
+// must either offer an artist search or be named in routeLessProviders.
+//
+// Adding a provider to Find means adding its row here. That one duplicated
+// path per provider is deliberate — the assertions on the exact URL belong to
+// the test for the mechanism that builds it, while this list only asks which
+// providers exist, which is the question the guard needs answered.
+var linkablePaths = []struct {
+	name string
+	path string
+}{
+	{"spotify track", "spotify:track:4uLU6hMCjMI75M1A2tKUQC"},
+	{"spotify episode", "spotify:episode:512ojhOuo1ktJprKbVcKyQ"},
+	{"youtube watch", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+	{"youtube music watch", "https://music.youtube.com/watch?v=dQw4w9WgXcQ"},
+}
+
+// routeLessProviders names the providers that deliberately have no artist
+// search route, each with the reason. It is a list rather than a hole in the
+// guard: a provider that is neither routed nor named here fails it, and a
+// provider named here still has to say why. Four of the five providers this
+// work links have no confirmed route, so this list starts empty and fills.
+var routeLessProviders = map[string]string{}
+
+// TestEveryLinkableProviderHasAnArtistRoute is the guard that closes the one
+// direction the two tables could drift in. The artist search test drives Find
+// and then ArtistSearch, so a route that is removed or renamed fails there; a
+// provider added to Find with no route failed nothing at all, and would put a
+// provider track link on the card beside a Last.fm artist link.
+func TestEveryLinkableProviderHasAnArtistRoute(t *testing.T) {
+	for _, testCase := range linkablePaths {
+		t.Run(testCase.name, func(t *testing.T) {
+			link, ok := Find(testCase.path)
+			if !ok {
+				t.Fatalf("Find(%q) ok=false; want a link", testCase.path)
+			}
+			if _, hasRoute := link.ArtistSearch("AC/DC"); hasRoute {
+				return
+			}
+			reason, documented := routeLessProviders[link.Provider]
+			if !documented {
+				t.Fatalf("%s has no artist route and is not in routeLessProviders", link.Provider)
+			}
+			if strings.TrimSpace(reason) == "" {
+				t.Fatalf("%s is in routeLessProviders with no reason given", link.Provider)
+			}
+		})
 	}
 }
