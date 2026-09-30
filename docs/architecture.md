@@ -237,8 +237,16 @@ timeout.
 
 The community-maintained default Discord application ID is used unless a custom
 ID is supplied through `--app-id`, `CLIAMP_DISCORD_APP_ID`, or
-`plugins.discord-rpc.app_id`. Last.fm artwork is enabled only when a
-`lastfm_api_key` is supplied.
+`plugins.discord-rpc.app_id`.
+
+Last.fm is consulted only when a `lastfm_api_key` is supplied, and the resolver
+returns before any request when it is absent, so a keyless daemon makes no
+lookup at all. That withholds both the artwork and the exact track and artist
+pages, since one response carries all three. The pages are never constructed
+from the artist and title instead: Last.fm's own slug rules fold case and
+rewrite punctuation, so a built URL is correct for most tracks and quietly wrong
+for the rest, which is the failure `internal/tracklink` exists to refuse. The
+card falls back to a Last.fm search, which needs no key.
 
 ## Card Links
 

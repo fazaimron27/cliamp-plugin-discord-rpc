@@ -199,14 +199,14 @@ in their own section, and every one of them is optional:
 ```toml
 [plugins.discord-rpc]
 transport = "ipc"      # ipc (default) or file
-# lastfm_api_key = ""  # a Last.fm key enables album artwork
+# lastfm_api_key = ""  # a Last.fm key enables artwork and exact links
 # app_id = ""          # your own Discord application ID
 # state_path = "/home/user/.local/share/cliamp/rpc-state.json"   # file transport only
 ```
 
 Restart Cliamp after changing any of them. The sections below cover each key.
 
-### Enable Last.fm album artwork
+### Enable Last.fm album artwork and exact links
 
 Create a Last.fm API key from the
 [API account page](https://www.last.fm/api/account/create), then add it to the
@@ -217,9 +217,22 @@ dedicated plugin section:
 lastfm_api_key = "YOUR_LASTFM_API_KEY"
 ```
 
-Only the API key is needed. Do not add the Last.fm shared secret. When the key
-is absent or empty, artwork lookup is disabled and the community-maintained
-static Discord asset is used.
+Only the API key is needed. Do not add the Last.fm shared secret.
+
+The key does two things, and the card works without it:
+
+- **Album artwork.** When the key is absent or empty, artwork lookup is disabled
+  and the community-maintained static Discord asset is used instead.
+- **Exact track and artist pages.** The same lookup reports the track's own
+  Last.fm page and its artist's, which the card links to. Without a key those
+  links are left off rather than guessed at: a constructed URL is right most of
+  the time, and a link that opens the wrong page is worse than one that opens
+  nothing.
+
+Where a link cannot be resolved, the card falls back to a Last.fm **search**,
+which needs no key. So without one, a local track still offers a working search
+button and a clickable artist, while a Spotify or YouTube track is linked in
+full — its page, its artist, and its button all point at that service.
 
 ### Use a custom Discord application
 
