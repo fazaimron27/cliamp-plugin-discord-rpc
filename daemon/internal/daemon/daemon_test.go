@@ -24,6 +24,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
 	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
@@ -163,6 +164,129 @@ func (f *refusingDiscord) leaves() {
 	f.up = false
 }
 
+// errActivityRejected is the client's own rejection type, carrying the detail
+// Discord sends for a payload it will not take. The daemon only ever sees this
+// value, so the test hands it the real type rather than a look-alike string.
+var errActivityRejected = &discord.RejectionError{Detail: `{"code":4000,"message":"Invalid payload"}`}
+
+// errDiscordWrite is a transport failure rather than a refusal: the socket went
+// away mid-write, so there is nothing to keep and reconnecting is the answer.
+var errDiscordWrite = errors.New("write unix /run/user/1000/discord-ipc-0: broken pipe")
+
+// rejectingDiscord models a Discord that talks and refuses what it is told: the
+// socket and the handshake are accepted, every activity is turned down, and so
+// is every clear — a clear is a SET_ACTIVITY like any other, so the same rule
+// covers both call sites. That distinction is the one the daemon has to act on
+// — everything here is reachable and the payload is the problem — so the fake
+// records what the daemon does to the *socket* as well as what it sends.
+//
+// Connects and closes are counted rather than inferred because the wrong
+// behaviour is silent: reconnecting on a rejection looks exactly like a
+// successful publish from every input the daemon passes in, and only the count
+// of teardowns tells them apart. Accepting is a switch rather than a separate
+// fake so one test can put an accepted activity between two rejections.
+type rejectingDiscord struct {
+	mu        sync.Mutex
+	connects  int
+	closes    int
+	sets      int
+	clears    int
+	accepted  int
+	accepting bool
+	clearErr  error
+	up        bool
+}
+
+func (f *rejectingDiscord) Connected() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.up
+}
+
+func (f *rejectingDiscord) Connect(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.connects++
+	f.up = true
+	return nil
+}
+
+func (f *rejectingDiscord) SetActivity(*presence.Activity) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sets++
+	if f.accepting {
+		f.accepted++
+		return nil
+	}
+	return errActivityRejected
+}
+
+func (f *rejectingDiscord) ClearActivity() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clears++
+	if f.clearErr != nil {
+		return f.clearErr
+	}
+	return errActivityRejected
+}
+
+func (f *rejectingDiscord) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closes++
+	f.up = false
+	return nil
+}
+
+func (f *rejectingDiscord) clearCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.clears
+}
+
+// clearFailsWith makes the clear fail for a reason other than Discord refusing
+// it, which is the case that must still be answered by reconnecting.
+func (f *rejectingDiscord) clearFailsWith(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearErr = err
+}
+
+func (f *rejectingDiscord) attempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sets
+}
+
+func (f *rejectingDiscord) teardowns() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closes
+}
+
+func (f *rejectingDiscord) acceptedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accepted
+}
+
+// accept lets the next activity through, and refuse turns Discord against the
+// payload again, so one test can put an accepted activity between two
+// rejections.
+func (f *rejectingDiscord) accept() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accepting = true
+}
+
+func (f *rejectingDiscord) refuse() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accepting = false
+}
+
 // waitFor polls until the condition holds. The daemon publishes from its own
 // goroutine, so every observation of it has to wait rather than assert.
 func waitFor(t *testing.T, what string, condition func() bool) {
@@ -199,6 +323,14 @@ func resolveFully(ctx context.Context, resolver artworkResolver, request artwork
 // the supplied plugin version, then holds the stream open until release closes.
 func serveCliampEvent(t *testing.T, socket, pluginVersion string, release <-chan struct{}) {
 	t.Helper()
+	serveCliampStatus(t, socket, pluginVersion, "playing", release)
+}
+
+// serveCliampStatus is the same session with the playback status in the
+// caller's hands, because the status is what decides whether the daemon
+// publishes a card or clears the one it has.
+func serveCliampStatus(t *testing.T, socket, pluginVersion, status string, release <-chan struct{}) {
+	t.Helper()
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +357,7 @@ func serveCliampEvent(t *testing.T, socket, pluginVersion string, release <-chan
 			"event": cliampipc.PlaybackTopic,
 			"time":  1000,
 			"data": map[string]any{
-				"status":         "playing",
+				"status":         status,
 				"title":          "Track",
 				"artist":         "Artist",
 				"duration":       200,
@@ -1027,4 +1159,185 @@ func TestRunReportsANewOutageAfterDiscordReturns(t *testing.T) {
 	waitFor(t, "the second outage to be reported", func() bool {
 		return strings.Count(logs.String(), "connect to Discord:") >= 2
 	})
+}
+
+// A refused payload says nothing about the socket. Discord read the request and
+// turned down what it said, so the connection is still good, and tearing it down
+// throws away a completed handshake that the next attempt has to pay for again.
+// The count that matters is teardowns rather than sends: reconnecting and
+// republishing is what the old path did, and it is invisible in what the daemon
+// sends.
+func TestRunLeavesTheConnectionOpenWhenDiscordRejectsAnActivity(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampEvent(t, socket, version.Number, release)
+
+	client := &rejectingDiscord{up: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "three rejected activities", func() bool { return client.attempts() >= 3 })
+	if teardowns := client.teardowns(); teardowns != 0 {
+		t.Fatalf("daemon tore the connection down %d times over %d rejections; a refused payload leaves the socket good",
+			teardowns, client.attempts())
+	}
+}
+
+// The report belongs to the fault rather than to the attempt. A rejected
+// activity is re-tried on every refresh, so a line per attempt would bury the
+// journal it exists to explain and would do it at the refresh rate for as long
+// as the payload stays refused.
+func TestRunReportsARejectedActivityOnce(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampEvent(t, socket, version.Number, release)
+
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	client := &rejectingDiscord{up: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "three rejected activities", func() bool { return client.attempts() >= 3 })
+
+	output := logs.String()
+	if !strings.Contains(output, errActivityRejected.Error()) {
+		t.Fatalf("a rejected activity produced no report:\n%s", output)
+	}
+	if count := strings.Count(output, "update Discord presence:"); count != 1 {
+		t.Fatalf("rejection reported %d times across %d attempts, want 1:\n%s",
+			count, client.attempts(), output)
+	}
+}
+
+// An accepted activity ends the outage of the payload's own making, so the next
+// rejection is a new one and is reported afresh -- the same rule the connect
+// report follows, for the same reason: a latch that never cleared would fall
+// silent precisely when the daemon began refusing activities again.
+func TestRunReportsANewRejectionAfterAnAcceptedActivity(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampEvent(t, socket, version.Number, release)
+
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	client := &rejectingDiscord{up: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "the first rejection", func() bool {
+		return strings.Count(logs.String(), "update Discord presence:") >= 1
+	})
+	client.accept()
+	waitFor(t, "an accepted activity", func() bool { return client.acceptedCount() > 0 })
+	client.refuse()
+	waitFor(t, "the second rejection to be reported", func() bool {
+		return strings.Count(logs.String(), "update Discord presence:") == 2
+	})
+}
+
+// A rejection is a content failure, so the retry belongs to the refresh rather
+// than to a shorter delay of its own: no amount of waiting changes a payload
+// Discord has already read and refused, and the refresh is when the loop
+// re-examines the card anyway. This is measured rather than asserted
+// structurally, because the failure it guards against is a cadence: a
+// one-second retry republishes the same refused bytes for as long as the fault
+// lasts, and every republish tears down a connection to do it.
+func TestRunRetriesARejectedActivityOnTheRefresh(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampEvent(t, socket, version.Number, release)
+
+	const refresh = 200 * time.Millisecond
+	client := &rejectingDiscord{up: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	started := time.Now()
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, refresh)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && client.attempts() < 3 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if client.attempts() < 3 {
+		t.Fatalf("daemon made %d activity attempts, want at least 3", client.attempts())
+	}
+	if elapsed := time.Since(started); elapsed > 700*time.Millisecond {
+		t.Fatalf("third activity attempt took %v with a %v refresh; a rejected activity is being retried on a delay of its own",
+			elapsed, refresh)
+	}
+}
+
+// A clear is a SET_ACTIVITY like any other, so a Discord that refuses one has
+// refused the payload rather than broken the socket. Pause and stop are what a
+// clear reports, which makes this the common case rather than a corner: any
+// user whose card will not clear would otherwise pay a teardown for every pause.
+func TestRunKeepsTheConnectionWhenDiscordRefusesToClear(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampStatus(t, socket, version.Number, "stopped", release)
+
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	client := &rejectingDiscord{up: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "the clear to be attempted", func() bool { return client.clearCount() >= 1 })
+	if teardowns := client.teardowns(); teardowns != 0 {
+		t.Fatalf("daemon tore the connection down %d times over a refused clear; the socket was never broken", teardowns)
+	}
+	if output := logs.String(); !strings.Contains(output, "clear Discord presence:") {
+		t.Fatalf("a refused clear produced no report:\n%s", output)
+	}
+}
+
+// The rule is about what the failure says, not about clear being special. A
+// clear that failed on the socket leaves the connection in doubt exactly as a
+// publish does, so it must keep the reconnect it has always had -- otherwise
+// "never close on a refusal" would quietly become "never close".
+func TestRunClosesTheConnectionWhenClearingFailsForAnotherReason(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampStatus(t, socket, version.Number, "stopped", release)
+
+	client := &rejectingDiscord{up: true}
+	client.clearFailsWith(errDiscordWrite)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "the clear to be attempted", func() bool { return client.clearCount() >= 1 })
+	waitFor(t, "the broken socket to be dropped", func() bool { return client.teardowns() >= 1 })
 }

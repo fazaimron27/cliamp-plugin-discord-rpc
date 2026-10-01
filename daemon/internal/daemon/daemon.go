@@ -14,6 +14,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -103,6 +104,37 @@ type discordClient interface {
 	SetActivity(*presence.Activity) error
 	ClearActivity() error
 	Close() error
+}
+
+// rejectionWatch reports a refused activity once per distinct rejection. The
+// loop re-tries a refused payload on every refresh, so a line per attempt would
+// bury the journal it exists to explain, and would do it at the refresh rate for
+// as long as the payload stays refused.
+//
+// It is keyed on Discord's own detail rather than on the activity, because the
+// detail is what names the fault: a second and different refusal is news, while
+// the same one repeated is not. A successful publish clears it, because a latch
+// that never cleared would fall silent exactly when the daemon began refusing
+// activities again, which is the state the report exists to surface.
+type rejectionWatch struct {
+	reported string
+}
+
+// observe records a rejection and reports whether it is one still worth
+// logging, which is the first of its kind since the last accepted activity.
+func (w *rejectionWatch) observe(err error) bool {
+	detail := err.Error()
+	if detail == w.reported {
+		return false
+	}
+	w.reported = detail
+	return true
+}
+
+// accepted records that Discord took an activity, so a rejection after it is
+// reported afresh.
+func (w *rejectionWatch) accepted() {
+	w.reported = ""
 }
 
 // artworkResolver supplies the artwork, the track page and the artist page for
@@ -253,6 +285,21 @@ func newResolver(cfg config.Config) artwork.Resolver {
 // because a latch that never cleared would fall silent exactly when the daemon
 // started failing again, which is the state the report exists to surface.
 //
+// An activity Discord refuses is not a Discord that cannot be reached, and is
+// answered differently. A refusal means the payload was read and turned down, so
+// the connection is still good and only different content can succeed; the
+// socket is therefore left open and the activity re-tried on the refresh.
+// Reconnecting instead would tear down a completed handshake and send the same
+// refused bytes down a fresh socket to be refused again, which is an endless
+// loop of teardowns for a fault no reconnection can clear. Every other error out
+// of SetActivity leaves the socket in doubt, and keeps the reconnect it has
+// always had.
+//
+// The same rule governs clearing, because a clear is a SET_ACTIVITY like any
+// other and only its activity differs. It is the more common of the two: a clear
+// is what a pause reports, so a refusal there would cost a teardown on every
+// pause rather than once per session.
+//
 // Artwork is looked up by a goroutine and delivered back here as a result tagged
 // with the track it was asked about. The tag is what lets the loop discard an
 // answer that arrived after the track changed, and the sending side abandons its
@@ -284,6 +331,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	var publishedKey string
 	var publishedAt time.Time
 	var discordUnreachableReported bool
+	var rejections rejectionWatch
 	reconnectDelay := time.Second
 	var watch versionWatch
 
@@ -338,7 +386,10 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		if client.Connected() && publishedKey != "clear" {
 			if err := client.ClearActivity(); err != nil {
 				log.Printf("clear Discord presence: %v", err)
-				_ = client.Close()
+				var rejected *discord.RejectionError
+				if !errors.As(err, &rejected) {
+					_ = client.Close()
+				}
 			}
 		}
 		publishedKey = "clear"
@@ -379,11 +430,20 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		discordUnreachableReported = false
 		activity := presence.Build(lastState, presence.Options{LargeImage: cfg.LargeImage, LargeText: cfg.LargeText}, info.Image, links, currentTime)
 		if err := client.SetActivity(activity); err != nil {
+			var rejected *discord.RejectionError
+			if errors.As(err, &rejected) {
+				if rejections.observe(err) {
+					log.Printf("update Discord presence: %v", err)
+				}
+				reset(refreshTimer, refresh)
+				return
+			}
 			log.Printf("update Discord presence: %v", err)
 			_ = client.Close()
 			reset(refreshTimer, time.Second)
 			return
 		}
+		rejections.accepted()
 		publishedKey = desiredKey
 		publishedAt = currentTime
 		reset(refreshTimer, refresh)

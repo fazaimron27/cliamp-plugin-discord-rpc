@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"path/filepath"
@@ -86,6 +87,77 @@ func TestDiscordClientHandshakeAndActivity(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Discord accepts the handshake and the request and then refuses the activity
+// itself, which is the shape of a 4000. The refusal is reported as its own type
+// because the caller has to tell it from a broken socket: Discord took the bytes
+// and rejected their contents, so the connection is still good and a new one
+// would refuse the same payload. The client must leave the socket open, which
+// the last assertion pins.
+func TestDiscordSetActivityReportsARejection(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	socket := filepath.Join(dir, "discord-ipc-0")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := readTestFrame(conn); err != nil {
+			return
+		}
+		if err := writeTestFrame(conn, 1, map[string]any{"evt": "READY"}); err != nil {
+			return
+		}
+		_, payload, err := readTestFrame(conn)
+		if err != nil {
+			return
+		}
+		var request struct {
+			Nonce string `json:"nonce"`
+		}
+		if err := json.Unmarshal(payload, &request); err != nil {
+			return
+		}
+		detail, err := json.Marshal(map[string]any{"code": 4000, "message": "Invalid payload"})
+		if err != nil {
+			return
+		}
+		_ = writeTestFrame(conn, 1, map[string]any{
+			"evt":   "ERROR",
+			"nonce": request.Nonce,
+			"data":  json.RawMessage(detail),
+		})
+	}()
+
+	client := discord.NewClient("123")
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	err = client.SetActivity(&presence.Activity{Details: "Track"})
+	if err == nil {
+		t.Fatal("SetActivity() succeeded against a peer that refused the activity")
+	}
+	var rejection *discord.RejectionError
+	if !errors.As(err, &rejection) {
+		t.Fatalf("a refused activity is not reported as a rejection: %v", err)
+	}
+	if !strings.Contains(rejection.Detail, "4000") {
+		t.Fatalf("rejection does not carry Discord's own detail: %q", rejection.Detail)
+	}
+	if !client.Connected() {
+		t.Fatal("client dropped a connection Discord only refused a payload on")
 	}
 }
 
