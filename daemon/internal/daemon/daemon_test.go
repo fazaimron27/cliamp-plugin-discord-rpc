@@ -297,6 +297,7 @@ type recoveringDiscord struct {
 	reachable bool
 	connected bool
 	connects  int
+	published int
 }
 
 func (r *recoveringDiscord) Connected() bool {
@@ -323,8 +324,17 @@ func (r *recoveringDiscord) Close() error {
 	return nil
 }
 
-func (r *recoveringDiscord) SetActivity(*presence.Activity) error { return r.request() }
-func (r *recoveringDiscord) ClearActivity() error                 { return r.request() }
+func (r *recoveringDiscord) SetActivity(*presence.Activity) error {
+	if err := r.request(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.published++
+	return nil
+}
+
+func (r *recoveringDiscord) ClearActivity() error { return r.request() }
 
 // request is what sending over a socket Discord has taken away does: it fails
 // the way the kernel reports a closed peer, and it is the connection that goes
@@ -349,6 +359,12 @@ func (r *recoveringDiscord) connectAttempts() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.connects
+}
+
+func (r *recoveringDiscord) publishedCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.published
 }
 
 // waitFor polls until the condition holds. The daemon publishes from its own
@@ -1443,4 +1459,40 @@ func TestRunReconnectsAfterADisconnectionWhilePaused(t *testing.T) {
 	waitFor(t, "the daemon to try Discord again on its own", func() bool {
 		return client.connectAttempts() > attempts
 	})
+}
+
+// The quiet path dials again too, so it has to report the outage the same way
+// the playing path does: a daemon that retried in silence would make the one
+// state this loop exists to explain invisible at the moment it is easiest to
+// miss, since a paused player is publishing nothing to bring the playing path
+// back round. The refresh is long on purpose, so the only thing that can reach
+// Discord between the pause and the assertion is the quiet retry; with a short
+// one the refresh could reach the playing path first and report the same outage
+// from there, and the test would pass without the quiet path reporting at all.
+func TestRunReportsAnOutageFoundWhileQuiet(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	client := &recoveringDiscord{reachable: true}
+
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	startDaemonWith(t, socket, noArtwork{}, 5*time.Second, client)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the playing card to reach Discord", func() bool {
+		return client.publishedCount() > 0
+	})
+
+	client.setReachable(false)
+	session.publish(t, stoppedSnapshot("Track"))
+	waitFor(t, "the quiet path to dial again", func() bool {
+		return client.connectAttempts() > 1
+	})
+
+	if count := strings.Count(logs.String(), "connect to Discord:"); count != 1 {
+		t.Fatalf("an outage found while quiet was reported %d times, want 1:\n%s", count, logs.String())
+	}
 }

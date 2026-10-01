@@ -289,7 +289,7 @@ func newResolver(cfg config.Config) artwork.Resolver {
 // opened.
 //
 // A Discord that cannot be reached is reported once per outage rather than once
-// per attempt. This branch runs on every retry, and Discord being closed is an
+// per attempt. Both paths dial on every retry, and Discord being closed is an
 // ordinary state rather than a fault, so a line per attempt would bury the
 // journal it exists to explain. The report clears on a successful connect,
 // because a latch that never cleared would fall silent exactly when the daemon
@@ -381,6 +381,18 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		}
 	}
 
+	dialDiscord := func() error {
+		if err := client.Connect(ctx); err != nil {
+			if !discordUnreachableReported {
+				log.Printf("connect to Discord: %v", err)
+				discordUnreachableReported = true
+			}
+			return err
+		}
+		discordUnreachableReported = false
+		return nil
+	}
+
 	subscribe := func(ctx context.Context) (<-chan playback.State, error) {
 		if cfg.Transport == config.TransportFile {
 			return statewatch.Subscribe(ctx, cfg.StatePath, cfg.StateMaxAge)
@@ -405,7 +417,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		publishedKey = "clear"
 		publishedAt = now()
 		if !client.Connected() && discordTried {
-			if err := client.Connect(ctx); err != nil {
+			if err := dialDiscord(); err != nil {
 				reset(refreshTimer, time.Second)
 				return
 			}
@@ -437,15 +449,10 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			return
 		}
 		discordTried = true
-		if err := client.Connect(ctx); err != nil {
-			if !discordUnreachableReported {
-				log.Printf("connect to Discord: %v", err)
-				discordUnreachableReported = true
-			}
+		if err := dialDiscord(); err != nil {
 			reset(refreshTimer, time.Second)
 			return
 		}
-		discordUnreachableReported = false
 		activity := presence.Build(lastState, presence.Options{LargeImage: cfg.LargeImage, LargeText: cfg.LargeText}, info.Image, links, currentTime)
 		if err := client.SetActivity(activity); err != nil {
 			var rejected *discord.RejectionError
