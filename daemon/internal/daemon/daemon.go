@@ -246,6 +246,13 @@ func newResolver(cfg config.Config) artwork.Resolver {
 // below covers both — the file transport fails while the directory its document
 // lives in does not exist yet.
 //
+// A Discord that cannot be reached is reported once per outage rather than once
+// per attempt. This branch runs on every retry, and Discord being closed is an
+// ordinary state rather than a fault, so a line per attempt would bury the
+// journal it exists to explain. The report clears on a successful connect,
+// because a latch that never cleared would fall silent exactly when the daemon
+// started failing again, which is the state the report exists to surface.
+//
 // Artwork is looked up by a goroutine and delivered back here as a result tagged
 // with the track it was asked about. The tag is what lets the loop discard an
 // answer that arrived after the track changed, and the sending side abandons its
@@ -276,6 +283,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	tracker := timelineTracker{nowUnix: func() int64 { return now().Unix() }}
 	var publishedKey string
 	var publishedAt time.Time
+	var discordUnreachableReported bool
 	reconnectDelay := time.Second
 	var watch versionWatch
 
@@ -361,9 +369,14 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			return
 		}
 		if err := client.Connect(ctx); err != nil {
+			if !discordUnreachableReported {
+				log.Printf("connect to Discord: %v", err)
+				discordUnreachableReported = true
+			}
 			reset(refreshTimer, time.Second)
 			return
 		}
+		discordUnreachableReported = false
 		activity := presence.Build(lastState, presence.Options{LargeImage: cfg.LargeImage, LargeText: cfg.LargeText}, info.Image, links, currentTime)
 		if err := client.SetActivity(activity); err != nil {
 			log.Printf("update Discord presence: %v", err)

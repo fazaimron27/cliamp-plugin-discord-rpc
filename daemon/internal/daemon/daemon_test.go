@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"path/filepath"
@@ -91,6 +92,75 @@ func (f *fakeDiscord) cleared() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.clearCalls
+}
+
+// errDiscordUnreachable is the shape of what a real Connect returns when no
+// socket candidate accepts. The daemon reports whatever error it is handed, so
+// the wording matters only as the string the report has to carry.
+var errDiscordUnreachable = errors.New("Discord IPC unavailable: dial unix /run/user/1000/discord-ipc-0: connect: no such file or directory")
+
+// refusingDiscord models a Discord that is not running, and is the one fake that
+// does not connect. Every attempt is counted and every publication recorded,
+// because the property under test is how many times the daemon *reports* a
+// failure it keeps making: a report per attempt and a report per outage are
+// indistinguishable from a single attempt.
+type refusingDiscord struct {
+	mu        sync.Mutex
+	connects  int
+	published int
+	up        bool
+}
+
+func (f *refusingDiscord) Connected() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.up
+}
+
+func (f *refusingDiscord) Connect(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.connects++
+	if f.up {
+		return nil
+	}
+	return errDiscordUnreachable
+}
+
+func (f *refusingDiscord) SetActivity(*presence.Activity) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.published++
+	return nil
+}
+
+func (f *refusingDiscord) ClearActivity() error { return nil }
+func (f *refusingDiscord) Close() error         { return nil }
+
+func (f *refusingDiscord) attempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.connects
+}
+
+func (f *refusingDiscord) activityCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.published
+}
+
+// returns brings Discord back, and leaves takes it away again, so a test can
+// put one outage on either side of a working connection.
+func (f *refusingDiscord) returns() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.up = true
+}
+
+func (f *refusingDiscord) leaves() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.up = false
 }
 
 // waitFor polls until the condition holds. The daemon publishes from its own
@@ -880,4 +950,81 @@ func TestNewResolverAsksThePlayerOverTheConfiguredSocket(t *testing.T) {
 	if info.Image != "https://i.scdn.co/image/x" {
 		t.Errorf("Image = %q; want the player's artwork", info.Image)
 	}
+}
+
+// Discord being closed is an ordinary state and this branch runs once a second,
+// so the reason the daemon cannot connect is reported once per outage rather
+// than once per attempt: a line a second would bury the journal it exists to
+// explain. The attempt count is checked first, because a report count only means
+// what it says once there were several attempts that could have been reported.
+func TestRunReportsAnUnreachableDiscordOncePerOutage(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampEvent(t, socket, version.Number, release)
+
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	client := &refusingDiscord{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) && client.attempts() < 3 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if client.attempts() < 3 {
+		t.Fatalf("daemon made %d connect attempts, want at least 3", client.attempts())
+	}
+
+	output := logs.String()
+	if !strings.Contains(output, "connect to Discord: "+errDiscordUnreachable.Error()) {
+		t.Fatalf("an unreachable Discord produced no report:\n%s", output)
+	}
+	if count := strings.Count(output, "connect to Discord:"); count != 1 {
+		t.Fatalf("outage reported %d times across %d attempts, want 1:\n%s", count, client.attempts(), output)
+	}
+}
+
+// The report belongs to the outage rather than to the process: once the
+// connection is back, a later failure is a new outage and is reported afresh. A
+// latch that never cleared would fall silent exactly when the daemon started
+// failing again, which is the state the report exists to surface.
+func TestRunReportsANewOutageAfterDiscordReturns(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampEvent(t, socket, version.Number, release)
+
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	client := &refusingDiscord{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "the first outage to be reported", func() bool {
+		return strings.Count(logs.String(), "connect to Discord:") == 1
+	})
+
+	client.returns()
+	waitFor(t, "the daemon to publish once Discord returned", func() bool {
+		return client.activityCount() > 0
+	})
+
+	client.leaves()
+	waitFor(t, "the second outage to be reported", func() bool {
+		return strings.Count(logs.String(), "connect to Discord:") >= 2
+	})
 }
