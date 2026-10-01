@@ -2,21 +2,32 @@
 -- the Go test beside it can read the documents and snapshots that were really
 -- produced. It is a test double for the Cliamp API, not part of the plugin.
 --
---     lua plugin_driver.lua <plugin path> <transport>
+--     lua plugin_driver.lua <plugin path> <transport> [scenario]
 --
 -- <transport> is what config.toml would hold: a string, or "nil" for a plugin
 -- that was never configured.
+--
+-- <scenario> adds events the default fixture does not have, so the tests that
+-- need them do not share the expectations of the tests that do not. The default
+-- fixture stands on its own and every existing test reads it: a start, a track
+-- change carrying one field, one heartbeat, and a quit.
+--
+--     seek           two player.seek fires, both re-sending a track that has
+--                    not changed, which is what a dragged progress bar produces
+--     no-artist      a track change with the artist cleared, as a local file or
+--                    a stream reports it
+--     stopped-start  Cliamp starts with nothing playing, so the snapshot at
+--                    app.start is a cleared card rather than a track and the
+--                    track change that follows is the first thing worth naming
 --
 -- Each line of output is "<kind>\t<body>", in the order the plugin produced it:
 --
 --     write\t<document>              one cliamp.fs.write
 --     publish\t<retain>\t<payload>   one p:publish
+--     message\t<text>\t<seconds>     one cliamp.message
 --     error\t<message>               one cliamp.log.error
---
--- The script it drives is the fixture the Go test asserts against: a start, a
--- track change carrying one field, one heartbeat, and a quit.
 
-local plugin_path, transport = arg[1], arg[2]
+local plugin_path, transport, scenario = arg[1], arg[2], arg[3]
 if transport == "nil" then
   transport = nil
 end
@@ -94,6 +105,7 @@ cliamp = {
   log = {
     error = function(message) emit("error", message) end,
   },
+  message = function(text, seconds) emit("message", text, tostring(seconds)) end,
   json = { encode = encode },
   fs = {
     write = function(_, content) emit("write", content) end,
@@ -132,13 +144,36 @@ end
 
 dofile(plugin_path)
 
+-- The status of the very first snapshot, which the stopped-start scenario needs
+-- to be a cleared card rather than a track.
+if scenario == "stopped-start" then
+  playing.status = "stopped"
+end
+
 fire("app.start")
 
 -- A track change that carries one field: the rest has to come from the player.
 clock = 1010
+if scenario == "stopped-start" then
+  playing.status = "playing"
+end
 playing.title = "Second Track"
 playing.position = 61
 fire("track.change", { title = "Second Track" })
+
+-- The scenario events, if any. They sit after the track change and before the
+-- heartbeat so the default fixture's own order is unchanged for every test
+-- that does not name one.
+if scenario == "seek" then
+  clock = 1015
+  fire("player.seek", {})
+  clock = 1016
+  fire("player.seek", {})
+elseif scenario == "no-artist" then
+  clock = 1015
+  playing.artist = ""
+  fire("track.change", {})
+end
 
 -- A heartbeat, with nothing about the playback having moved. Only the file
 -- transport registers one, so over IPC there is nothing to fire here and the

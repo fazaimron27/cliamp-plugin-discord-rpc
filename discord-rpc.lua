@@ -86,6 +86,55 @@ local function snapshot(event, forced_status)
   }
 end
 
+-- How long an announcement stays on screen, matching the Last.fm plugin's own
+-- message duration so a track change and a scrobble linger for the same time.
+local MESSAGE_SECS = 10
+
+-- The last line announced, so an immediate repeat can be skipped.
+local lastAnnounced = nil
+
+-- The track as one line: artist first, then title. Either half can be missing —
+-- a local file and a stream both report no artist — so what is there is what is
+-- said. Concatenating regardless would read "- Track", a separator with nothing
+-- before it.
+local function trackName(payload)
+  if payload.artist == "" then
+    return payload.title
+  end
+  if payload.title == "" then
+    return payload.artist
+  end
+  return payload.artist .. " - " .. payload.title
+end
+
+-- Says in Cliamp which track was just handed to the daemon, so the card can be
+-- read without leaving the player. What it names is what was sent, not what is
+-- showing: nothing reads the daemon back, so a card Discord refused, or one it
+-- skipped as unchanged, still reads as sent.
+--
+-- Only a card with a track on it is worth naming, so a stopped snapshot says
+-- nothing: that is the card being cleared. A snapshot withheld for carrying no
+-- status never reaches here, since each caller returns on nil first.
+local function announce(payload)
+  if payload.status ~= "playing" and payload.status ~= "paused" then
+    return
+  end
+  local name = trackName(payload)
+  if name == "" then
+    return
+  end
+  local text = "Broadcasting to Discord: " .. name
+  -- Cliamp fires a seek for every step of a dragged progress bar, and each one
+  -- re-sends a track that has not changed, so the same line is said once. The
+  -- latch cannot wedge: the text is rebuilt from the current track every time,
+  -- so the next track always differs from it.
+  if text == lastAnnounced then
+    return
+  end
+  lastAnnounced = text
+  cliamp.message(text, MESSAGE_SECS)
+end
+
 -- IPC: one retained publish per snapshot. The daemon subscribes and each
 -- snapshot replaces the last, so nothing has to be remembered here.
 local function publish(event, forced_status)
@@ -97,7 +146,11 @@ local function publish(event, forced_status)
   local ok, err = p:publish("playback", payload, { retain = true })
   if not ok then
     cliamp.log.error("discord-rpc: publish failed: " .. tostring(err))
+    -- A publish that did not land handed nothing over, so there is nothing to
+    -- name.
+    return
   end
+  announce(payload)
 end
 
 -- File: the daemon watches a document, and what it reads between writes has to
@@ -142,6 +195,10 @@ if TRANSPORT == "file" then
     end
     document.updated_at = os.time()
     flush()
+    -- Here rather than in flush: the beat repeats the track it beat for, so the
+    -- latch would swallow a line from there anyway, but announcing belongs to a
+    -- change and a heartbeat is not one.
+    announce(payload)
   end
 
   emit = change

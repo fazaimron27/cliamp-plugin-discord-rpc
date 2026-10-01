@@ -39,6 +39,12 @@ M.log = {
   warn = function(message) table.insert(M.logs, message) end,
 }
 
+-- The plugin names the track it published, through cliamp.message. Which track
+-- that names is asserted in the statewatch harness, where the message is the
+-- subject of the test; the contract here is the published payload, so this only
+-- has to accept the call.
+local function message() end
+
 local handle = {}
 
 function handle:publish(topic, payload, options)
@@ -77,6 +83,7 @@ function M.install()
     player = M.player,
     track = M.track,
     log = M.log,
+    message = message,
   }
 end
 
