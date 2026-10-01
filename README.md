@@ -98,6 +98,10 @@ The installer:
 The user service is installed but deliberately left disabled and inactive. The
 installer prints both installed paths and does not start the daemon.
 
+Reinstalling over a daemon that is already running leaves the old binary in
+memory, so restart it: `systemctl --user restart cliamp-rpcd.service` for the
+service, or stop and start it in the terminal.
+
 To install a specific version or use custom destinations, download the script
 first and pass options to it. Run `sh install.sh --help` for details.
 
@@ -175,20 +179,41 @@ silent. A plugin old enough to omit its version is not warned about at all.
 
 ### Optional systemd user service
 
-To run the daemon automatically in your desktop session instead of keeping it
-in a terminal:
+The installer leaves the unit installed, disabled, and stopped. To run the
+daemon automatically in your desktop session instead of keeping it in a
+terminal, enable it — this starts it now and at every login:
 
 ```sh
 systemctl --user enable --now cliamp-rpcd.service
+```
+
+Check it, and follow what it logs:
+
+```sh
 systemctl --user status cliamp-rpcd.service
 journalctl --user -u cliamp-rpcd.service -f
 ```
 
-Stop and disable automatic startup with:
+Restart it after changing the configuration or replacing the binary:
 
 ```sh
+systemctl --user restart cliamp-rpcd.service
+```
+
+Stop it, either for now or so it no longer starts at your next login:
+
+```sh
+systemctl --user stop cliamp-rpcd.service
 systemctl --user disable --now cliamp-rpcd.service
 ```
+
+The unit is started by your login session rather than at boot, and is ordered
+after `graphical-session.target` on purpose. Everything the daemon needs belongs
+to that session: Cliamp's IPC socket, the state document, and the Discord client
+it reports to. Started at boot it would come up before any of them and have
+nothing to mirror, so the unit does not ask for `loginctl enable-linger`.
+Turning that on by hand buys a daemon that sits there reconnecting to a Discord
+client nobody has started yet.
 
 ## Configuration
 
@@ -204,7 +229,10 @@ transport = "ipc"      # ipc (default) or file
 # state_path = "/home/user/.local/share/cliamp/rpc-state.json"   # file transport only
 ```
 
-Restart Cliamp after changing any of them. The sections below cover each key.
+Restart Cliamp after changing any of them. The daemon reads this file once, at
+startup, and never again, so restart that half too:
+`systemctl --user restart cliamp-rpcd.service` if it runs as a service, or stop
+and start it if it is running in a terminal. The sections below cover each key.
 
 ### Enable Last.fm album artwork and exact links
 
@@ -386,12 +414,19 @@ pub/sub API.
 
 ### The service fails immediately
 
-Run the daemon in the foreground to see the configuration error directly:
+The unit is set to `Restart=on-failure` with `RestartSec=3`, so a daemon that
+exits with an error is brought back three seconds later. A configuration mistake
+therefore shows up as a service that keeps cycling rather than one that stops.
+Run the daemon in the foreground to see the error directly:
 
 ```sh
-systemctl --user stop cliamp-rpcd
+systemctl --user stop cliamp-rpcd.service
 ~/.local/bin/cliamp-rpcd
 ```
+
+Once the cause is fixed, `systemctl --user restart cliamp-rpcd.service` picks it
+up. If systemd has given up after repeated failures and left the unit failed,
+clear that first with `systemctl --user reset-failed cliamp-rpcd.service`.
 
 The built-in Application ID is used unless a custom value is supplied. The
 Last.fm API key is optional: without it the card still takes the thumbnail
