@@ -43,6 +43,27 @@ func NewClient(applicationID string) *Client {
 	return &Client{applicationID: applicationID}
 }
 
+// RejectionError reports that Discord took a request and refused its contents.
+//
+// It is a type rather than a message because the two failures out of
+// SetActivity call for opposite remedies. A rejection means Discord read the
+// bytes and refused what they said, so the connection is still good and only a
+// different payload can succeed; every other error leaves the socket in doubt
+// and is repaired by reconnecting. A caller that cannot tell them apart
+// reconnects on a rejection, sends the same bytes down a fresh socket, and is
+// refused again -- which is how one unacceptable field becomes an endless loop
+// of teardowns.
+type RejectionError struct {
+	// Detail is the body of Discord's ERROR frame, kept verbatim so the journal
+	// carries what Discord actually said rather than a paraphrase of it.
+	Detail string
+}
+
+// Error renders the rejection in the words the daemon has always logged for it.
+func (e *RejectionError) Error() string {
+	return "Discord rejected activity: " + e.Detail
+}
+
 // Connected reports whether a connection is currently open. It only answers the
 // question; Connect is what repairs a client that reads false.
 func (c *Client) Connected() bool { return c.conn != nil }
@@ -178,7 +199,7 @@ func (c *Client) setActivity(activity *presence.Activity) error {
 			continue
 		}
 		if response.Event == "ERROR" {
-			return fmt.Errorf("Discord rejected activity: %s", response.Data)
+			return &RejectionError{Detail: string(response.Data)}
 		}
 		return nil
 	}
