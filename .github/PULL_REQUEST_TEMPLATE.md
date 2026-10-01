@@ -2,8 +2,10 @@
 Title: type(scope): what changed — fix, feat, docs, chore, ci, test. Lowercase,
 imperative, no trailing period. A release PR is chore(release): vX.Y.Z.
 
-Delete any section below that does not apply. An empty heading is worse than a
-missing one.
+Delete any section below that does not apply, and any check inside one. Strike
+a check that does not apply rather than leaving it blank: an empty box reads as
+work not done, and a ticked box that did not happen is worse. An empty heading
+is worse than a missing one.
 -->
 
 <!--
