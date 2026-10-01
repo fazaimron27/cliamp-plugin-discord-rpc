@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"path/filepath"
@@ -99,11 +100,16 @@ func (f *fakeDiscord) cleared() int {
 // value, so the test hands it the real type rather than a look-alike string.
 var errActivityRejected = &discord.RejectionError{Detail: `{"code":4000,"message":"Invalid payload"}`}
 
+// errDiscordWrite is a transport failure rather than a refusal: the socket went
+// away mid-write, so there is nothing to keep and reconnecting is the answer.
+var errDiscordWrite = errors.New("write unix /run/user/1000/discord-ipc-0: broken pipe")
+
 // rejectingDiscord models a Discord that talks and refuses what it is told: the
-// socket and the handshake are accepted, every activity is turned down. That
-// distinction is the one the daemon has to act on — everything here is
-// reachable and the payload is the problem — so the fake records what the
-// daemon does to the *socket* as well as what it sends.
+// socket and the handshake are accepted, every activity is turned down, and so
+// is every clear — a clear is a SET_ACTIVITY like any other, so the same rule
+// covers both call sites. That distinction is the one the daemon has to act on
+// — everything here is reachable and the payload is the problem — so the fake
+// records what the daemon does to the *socket* as well as what it sends.
 //
 // Connects and closes are counted rather than inferred because the wrong
 // behaviour is silent: reconnecting on a rejection looks exactly like a
@@ -115,8 +121,10 @@ type rejectingDiscord struct {
 	connects  int
 	closes    int
 	sets      int
+	clears    int
 	accepted  int
 	accepting bool
+	clearErr  error
 	up        bool
 }
 
@@ -145,7 +153,15 @@ func (f *rejectingDiscord) SetActivity(*presence.Activity) error {
 	return errActivityRejected
 }
 
-func (f *rejectingDiscord) ClearActivity() error { return nil }
+func (f *rejectingDiscord) ClearActivity() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clears++
+	if f.clearErr != nil {
+		return f.clearErr
+	}
+	return errActivityRejected
+}
 
 func (f *rejectingDiscord) Close() error {
 	f.mu.Lock()
@@ -153,6 +169,20 @@ func (f *rejectingDiscord) Close() error {
 	f.closes++
 	f.up = false
 	return nil
+}
+
+func (f *rejectingDiscord) clearCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.clears
+}
+
+// clearFailsWith makes the clear fail for a reason other than Discord refusing
+// it, which is the case that must still be answered by reconnecting.
+func (f *rejectingDiscord) clearFailsWith(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearErr = err
 }
 
 func (f *rejectingDiscord) attempts() int {
@@ -224,6 +254,14 @@ func resolveFully(ctx context.Context, resolver artworkResolver, request artwork
 // the supplied plugin version, then holds the stream open until release closes.
 func serveCliampEvent(t *testing.T, socket, pluginVersion string, release <-chan struct{}) {
 	t.Helper()
+	serveCliampStatus(t, socket, pluginVersion, "playing", release)
+}
+
+// serveCliampStatus is the same session with the playback status in the
+// caller's hands, because the status is what decides whether the daemon
+// publishes a card or clears the one it has.
+func serveCliampStatus(t *testing.T, socket, pluginVersion, status string, release <-chan struct{}) {
+	t.Helper()
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +288,7 @@ func serveCliampEvent(t *testing.T, socket, pluginVersion string, release <-chan
 			"event": cliampipc.PlaybackTopic,
 			"time":  1000,
 			"data": map[string]any{
-				"status":         "playing",
+				"status":         status,
 				"title":          "Track",
 				"artist":         "Artist",
 				"duration":       200,
@@ -1103,4 +1141,57 @@ func TestRunRetriesARejectedActivityOnTheRefresh(t *testing.T) {
 		t.Fatalf("third activity attempt took %v with a %v refresh; a rejected activity is being retried on a delay of its own",
 			elapsed, refresh)
 	}
+}
+
+// A clear is a SET_ACTIVITY like any other, so a Discord that refuses one has
+// refused the payload rather than broken the socket. Pause and stop are what a
+// clear reports, which makes this the common case rather than a corner: any
+// user whose card will not clear would otherwise pay a teardown for every pause.
+func TestRunKeepsTheConnectionWhenDiscordRefusesToClear(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampStatus(t, socket, version.Number, "stopped", release)
+
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	client := &rejectingDiscord{up: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "the clear to be attempted", func() bool { return client.clearCount() >= 1 })
+	if teardowns := client.teardowns(); teardowns != 0 {
+		t.Fatalf("daemon tore the connection down %d times over a refused clear; the socket was never broken", teardowns)
+	}
+	if output := logs.String(); !strings.Contains(output, "clear Discord presence:") {
+		t.Fatalf("a refused clear produced no report:\n%s", output)
+	}
+}
+
+// The rule is about what the failure says, not about clear being special. A
+// clear that failed on the socket leaves the connection in doubt exactly as a
+// publish does, so it must keep the reconnect it has always had -- otherwise
+// "never close on a refusal" would quietly become "never close".
+func TestRunClosesTheConnectionWhenClearingFailsForAnotherReason(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	serveCliampStatus(t, socket, version.Number, "stopped", release)
+
+	client := &rejectingDiscord{up: true}
+	client.clearFailsWith(errDiscordWrite)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+	}()
+
+	waitFor(t, "the clear to be attempted", func() bool { return client.clearCount() >= 1 })
+	waitFor(t, "the broken socket to be dropped", func() bool { return client.teardowns() >= 1 })
 }

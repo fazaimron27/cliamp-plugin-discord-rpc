@@ -288,6 +288,11 @@ func newResolver(cfg config.Config) artwork.Resolver {
 // of SetActivity leaves the socket in doubt, and keeps the reconnect it has
 // always had.
 //
+// The same rule governs clearing, because a clear is a SET_ACTIVITY like any
+// other and only its activity differs. It is the more common of the two: a clear
+// is what a pause reports, so a refusal there would cost a teardown on every
+// pause rather than once per session.
+//
 // Artwork is looked up by a goroutine and delivered back here as a result tagged
 // with the track it was asked about. The tag is what lets the loop discard an
 // answer that arrived after the track changed, and the sending side abandons its
@@ -373,7 +378,10 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		if client.Connected() && publishedKey != "clear" {
 			if err := client.ClearActivity(); err != nil {
 				log.Printf("clear Discord presence: %v", err)
-				_ = client.Close()
+				var rejected *discord.RejectionError
+				if !errors.As(err, &rejected) {
+					_ = client.Close()
+				}
 			}
 		}
 		publishedKey = "clear"
