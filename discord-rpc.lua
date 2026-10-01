@@ -36,14 +36,16 @@ local STATE_PATH = STATE_DIR .. "/rpc-state.json"
 --
 -- Three beats of staleness, the same tolerance the playback document's window
 -- gives: one missed beat is a slow write, and only a beat that has stopped for
--- three is a daemon that stopped. The poll runs at the daemon's own beat, so a
--- transition is seen within a beat of being written and a stopped daemon within
--- the threshold after that; anything faster would only read the same document
--- twice, and the contract test refuses a poll slower than the threshold, since
+-- three is a daemon that stopped. The poll is the only delay left in the other
+-- direction, because the daemon writes a change the moment it happens and the
+-- beat exists to prove it is alive rather than to carry news, so this reads
+-- once a second: the document is a few dozen bytes and stays in the page
+-- cache, and a slower poll would hold a change back for no saving worth
+-- having. The contract test refuses a poll slower than the threshold, since
 -- that would leave a disconnection unsaid for an interval after the document
 -- had already shown it.
 local STATUS_SCHEMA_VERSION = 1
-local STATUS_POLL_SECS = 5
+local STATUS_POLL_SECS = 1
 local STATUS_STALE_SECS = 15
 local STATUS_PATH = STATE_DIR .. "/rpc-status.json"
 

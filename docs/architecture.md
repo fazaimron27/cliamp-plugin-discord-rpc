@@ -164,7 +164,9 @@ halves pointed at different files.
 - `beat` is Unix seconds, rewritten on a 5-second timer whether or not the
   connection changed. It is the point of the file: what the plugin has to
   notice is a daemon that stopped, and a state written once at startup would go
-  on reading as a live connection for as long as nobody looked.
+  on reading as a live connection for as long as nobody looked. A change of
+  connection is written when it happens rather than at the next beat, since the
+  beat is there to prove the daemon is alive and not to carry news.
 - `connected` is a boolean, and it is absent until the daemon has tried to
   reach Discord. The daemon connects lazily, when it first has something to
   publish, so a quiet session never reaches Discord at all; reporting that as
@@ -182,7 +184,9 @@ of an unknown schema is silence rather than a change, because none of those is
 a fact about Discord.
 
 Writes land by rename, so a plugin polling on a clock of its own never reads a
-half-written file. The plugin says one message per change and remembers what it
+half-written file. It reads once a second, which is all that stands between a
+written change and the status line: the document is a few dozen bytes and stays
+in the page cache. The plugin says one message per change and remembers what it
 last said in `cliamp.store`, which is what keeps a Cliamp restart from
 re-announcing the connection every session begins with.
 

@@ -106,6 +106,19 @@ func TestPluginPollsWithoutWaitingOutItsOwnThreshold(t *testing.T) {
 	}
 }
 
+// The poll is the plugin's whole share of the delay. The daemon writes a change
+// the moment it happens, so all that stands between the change and the status
+// line is how often the plugin looks, and a status line that arrives seconds
+// late reads as a broken one rather than a lagging one. The document is a few
+// dozen bytes and stays in the page cache, so looking once a second costs
+// nothing worth weighing against that.
+func TestPluginReadsTheStatusWithinASecond(t *testing.T) {
+	seconds := pluginSeconds(t, `local STATUS_POLL_SECS = (\d+)`, "STATUS_POLL_SECS")
+	if seconds > 1 {
+		t.Fatalf("poll interval = %ds; a change the daemon has already written would sit unread for that long", seconds)
+	}
+}
+
 // pluginSeconds reads a Lua constant the driver also needs, failing on one that
 // is not a whole number of seconds.
 func pluginSeconds(t *testing.T, pattern, what string) int {

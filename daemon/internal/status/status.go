@@ -62,6 +62,13 @@ type Reporter struct {
 	path string
 	beat time.Duration
 	now  func() time.Time
+	// wake carries a state change to the writer, so a change is written when it
+	// happens rather than when the next beat falls due. It is buffered and
+	// written to without blocking, because the daemon's event loop is the sender
+	// and a loop that waited on a file would be the cost this design avoids; the
+	// writer reads the current state rather than the message, so a signal that
+	// arrives while another is still queued loses nothing.
+	wake chan struct{}
 
 	mu    sync.Mutex
 	state State
@@ -76,15 +83,27 @@ type Reporter struct {
 // New returns a reporter that writes path every beat. The clock is a parameter
 // so a test can move a beat interval without waiting one out.
 func New(path string, beat time.Duration, now func() time.Time) *Reporter {
-	return &Reporter{path: path, beat: beat, now: now}
+	return &Reporter{path: path, beat: beat, now: now, wake: make(chan struct{}, 1)}
 }
 
-// Set records what the daemon now knows. The write itself happens on the next
-// beat, so the daemon's event loop never waits on a file.
+// Set records what the daemon now knows and has it written. The daemon's event
+// loop never waits on a file: the write happens on the writer's goroutine, which
+// this nudges. Only a change is worth writing, since the daemon reports the same
+// connection on every publish and a state the plugin has already read does not
+// become news by being written again; the beat rewrites the document regardless,
+// which is what keeps a daemon that is merely quiet from reading as a dead one.
 func (r *Reporter) Set(state State) {
 	r.mu.Lock()
+	changed := state != r.state
 	r.state = state
 	r.mu.Unlock()
+	if !changed {
+		return
+	}
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Report writes the document immediately and then on every beat, returning when
@@ -99,6 +118,8 @@ func (r *Reporter) Report(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			r.write()
+		case <-r.wake:
 			r.write()
 		}
 	}

@@ -283,3 +283,21 @@ func awaitBeat(t *testing.T, path string, previous int64) document {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// A connection that changes is news, and it is the news the plugin exists to
+// show: the daemon learns it inside its event loop and can put it on disk there
+// and then. The beat is for the opposite job, proving the daemon is still alive
+// when nothing has changed, so it is no reason to hold a change back. The beat
+// here is an hour, which is long enough that no write but an immediate one can
+// explain the document moving at all.
+func TestReporterWritesAChangeWithoutWaitingOutTheBeat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rpc-status.json")
+	reporter := status.New(path, time.Hour, time.Now)
+
+	stop := start(t, reporter)
+	defer stop()
+	await(t, path)
+
+	reporter.Set(status.Connected)
+	awaitState(t, path, true)
+}
