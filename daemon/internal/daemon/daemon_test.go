@@ -287,6 +287,70 @@ func (f *rejectingDiscord) refuse() {
 	f.accepting = false
 }
 
+// recoveringDiscord is a Discord a test can take away and give back. It models
+// the state the other fake cannot: a socket that was open and then died, which
+// is what a Discord restart leaves behind and what Connected is asked about.
+// Reachability and the open socket are separate, because that gap is the whole
+// failure — the socket is still there and Discord is not.
+type recoveringDiscord struct {
+	mu        sync.Mutex
+	reachable bool
+	connected bool
+	connects  int
+}
+
+func (r *recoveringDiscord) Connected() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.connected
+}
+
+func (r *recoveringDiscord) Connect(context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.connects++
+	if !r.reachable {
+		return errors.New("Discord IPC unavailable: no Discord IPC socket candidates")
+	}
+	r.connected = true
+	return nil
+}
+
+func (r *recoveringDiscord) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.connected = false
+	return nil
+}
+
+func (r *recoveringDiscord) SetActivity(*presence.Activity) error { return r.request() }
+func (r *recoveringDiscord) ClearActivity() error                 { return r.request() }
+
+// request is what sending over a socket Discord has taken away does: it fails
+// the way the kernel reports a closed peer, and it is the connection that goes
+// with the peer rather than only the one request.
+func (r *recoveringDiscord) request() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.reachable {
+		r.connected = false
+		return errors.New("write unix /run/user/1000/discord-ipc-0: broken pipe")
+	}
+	return nil
+}
+
+func (r *recoveringDiscord) setReachable(reachable bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reachable = reachable
+}
+
+func (r *recoveringDiscord) connectAttempts() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.connects
+}
+
 // waitFor polls until the condition holds. The daemon publishes from its own
 // goroutine, so every observation of it has to wait rather than assert.
 func waitFor(t *testing.T, what string, condition func() bool) {
@@ -753,12 +817,21 @@ func (s *stagedArtwork) Resolve(ctx context.Context, _ artwork.Request, report f
 func startDaemon(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration) *fakeDiscord {
 	t.Helper()
 	client := &fakeDiscord{}
+	startDaemonWith(t, socket, resolver, refresh, client)
+	return client
+}
+
+// startDaemonWith runs the loop against a Discord of the test's choosing, so a
+// test can hold the connection it is handed and take it away again. The default
+// fake is reachable and connected for its whole life, which leaves every failure
+// that arrives over a socket that is still open untestable.
+func startDaemonWith(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration, client discordClient) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
 		_ = run(ctx, config.Config{CliampSocket: socket}, client, resolver, time.Now, refresh)
 	}()
-	return client
 }
 
 // countingArtwork answers every lookup with the same image, so a test can see how
@@ -1340,4 +1413,34 @@ func TestRunClosesTheConnectionWhenClearingFailsForAnotherReason(t *testing.T) {
 
 	waitFor(t, "the clear to be attempted", func() bool { return client.clearCount() >= 1 })
 	waitFor(t, "the broken socket to be dropped", func() bool { return client.teardowns() >= 1 })
+}
+
+// A connection lost while the player is quiet has to be looked for again
+// without a new Cliamp event, because none is coming: a paused player publishes
+// nothing, and the clear that follows one is where the loop stops watching its
+// own clock. A daemon that only ever retries from the playing path sits on a
+// dead socket until something happens to play, which is the restart this test
+// exists to make unnecessary.
+func TestRunReconnectsAfterADisconnectionWhilePaused(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	client := &recoveringDiscord{reachable: true}
+	startDaemonWith(t, socket, noArtwork{}, 20*time.Millisecond, client)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the daemon to reach Discord for the playing track", func() bool {
+		return client.connectAttempts() > 0
+	})
+
+	client.setReachable(false)
+	session.publish(t, stoppedSnapshot("Track"))
+	waitFor(t, "the daemon to notice Discord took the socket away", func() bool {
+		return !client.Connected()
+	})
+
+	attempts := client.connectAttempts()
+	client.setReachable(true)
+	waitFor(t, "the daemon to try Discord again on its own", func() bool {
+		return client.connectAttempts() > attempts
+	})
 }
