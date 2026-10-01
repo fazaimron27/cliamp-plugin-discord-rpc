@@ -22,6 +22,16 @@ const (
 	maxDetailsRunes       = 48
 	maxStateRunes         = 40
 
+	// minFieldRunes is Discord's floor for the text on an activity. Details,
+	// state and the large-image hover text are each refused below two
+	// characters, and a refused field refuses the whole activity -- so a value
+	// this short is left out of the payload rather than sent.
+	//
+	// Counted in runes because Discord counts characters rather than bytes. "∞"
+	// is one character and three bytes, so a byte-length check would let it
+	// through to be rejected.
+	minFieldRunes = 2
+
 	getCliampLabel = "Get Cliamp Music Player"
 	getCliampURL   = "https://www.cliamp.stream/"
 	lastFMName     = "Last.fm"
@@ -82,8 +92,8 @@ func (l Links) Key() string {
 // Activity is the SET_ACTIVITY payload sent to Discord.
 type Activity struct {
 	Type              int         `json:"type"`
-	Details           string      `json:"details"`
-	State             string      `json:"state"`
+	Details           string      `json:"details,omitempty"`
+	State             string      `json:"state,omitempty"`
 	DetailsURL        string      `json:"details_url,omitempty"`
 	StateURL          string      `json:"state_url,omitempty"`
 	StatusDisplayType int         `json:"status_display_type"`
@@ -255,17 +265,27 @@ func Build(s playback.State, options Options, artworkURL string, links Links, no
 	return activity
 }
 
+// truncateRunes caps a text field at maxRunes, keeping anything already
+// shorter. A value below Discord's floor is dropped outright.
 func truncateRunes(value string, maxRunes int) string {
 	value = strings.TrimSpace(value)
 	runes := []rune(value)
+	if len(runes) < minFieldRunes {
+		return ""
+	}
 	if len(runes) <= maxRunes {
 		return value
 	}
 	return string(runes[:maxRunes-3]) + "..."
 }
 
+// truncate caps a text field at maxBytes on a rune boundary, keeping anything
+// already shorter. A value below Discord's floor is dropped outright.
 func truncate(value string, maxBytes int) string {
 	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) < minFieldRunes {
+		return ""
+	}
 	if len(value) <= maxBytes {
 		return value
 	}

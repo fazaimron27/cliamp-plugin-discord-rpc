@@ -112,6 +112,79 @@ func TestPresenceTruncationPreservesUTF8(t *testing.T) {
 	}
 }
 
+// Discord rejects the entire activity when assets.large_text is shorter than two
+// characters, so a one-character album is left out rather than sent and the card
+// survives without that one field.
+//
+// The value is counted in runes because Discord counts characters. "∞" is one
+// character and three bytes, so a byte-length check would pass it through and
+// the payload would be refused.
+func TestPresenceOmitsAlbumTextBelowDiscordsMinimum(t *testing.T) {
+	for _, album := range []string{"∞", "🎵"} {
+		t.Run(album, func(t *testing.T) {
+			state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Album: album}
+			activity := presence.Build(state, presence.Options{LargeImage: "cliamp", LargeText: "Cliamp"}, "", presence.Links{}, time.Now())
+
+			if activity.Assets == nil {
+				t.Fatalf("album %q produced no assets; the artwork should still be published", album)
+			}
+			if activity.Assets.LargeText != "" {
+				t.Fatalf("large_text = %q (%d runes); want it omitted, because Discord refuses a one-character value",
+					activity.Assets.LargeText, len([]rune(activity.Assets.LargeText)))
+			}
+			if activity.Assets.LargeImage != "cliamp" {
+				t.Fatalf("large_image = %q; want the artwork kept", activity.Assets.LargeImage)
+			}
+		})
+	}
+}
+
+// The same floor applies to the two fields beside the artwork, so a
+// one-character title or artist is omitted rather than sent.
+//
+// Omitted, not blanked: an empty value is still a value on the wire and could be
+// refused in its own right, which would trade one rejection for another, so the
+// payload drops the key instead.
+func TestPresenceOmitsTitleAndArtistBelowDiscordsMinimum(t *testing.T) {
+	state := playback.State{Status: "playing", Title: "A", Artist: "∞", Album: "Album"}
+	activity := presence.Build(state, presence.Options{LargeImage: "cliamp", LargeText: "Cliamp"}, "", presence.Links{}, time.Now())
+
+	if activity.Details != "" {
+		t.Fatalf("details = %q; want a one-character title omitted", activity.Details)
+	}
+	if activity.State != "" {
+		t.Fatalf("state = %q; want a one-character artist omitted", activity.State)
+	}
+
+	data, err := json.Marshal(activity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"details", "state"} {
+		if _, present := payload[field]; present {
+			t.Errorf("payload carries %s with nothing to put in it: %s", field, data)
+		}
+	}
+}
+
+// Two characters is the floor, not a threshold to clear by a margin, so a value
+// of exactly two is published unchanged.
+func TestPresenceKeepsFieldsAtDiscordsMinimum(t *testing.T) {
+	state := playback.State{Status: "playing", Title: "EP", Artist: "EP", Album: "EP"}
+	activity := presence.Build(state, presence.Options{LargeImage: "cliamp", LargeText: "Cliamp"}, "", presence.Links{}, time.Now())
+
+	if activity.Details != "EP" || activity.State != "EP" {
+		t.Fatalf("details/state = %q/%q; want both kept at two characters", activity.Details, activity.State)
+	}
+	if activity.Assets == nil || activity.Assets.LargeText != "EP" {
+		t.Fatalf("assets = %+v; want large_text kept at two characters", activity.Assets)
+	}
+}
+
 // The marshalled payload carries the public track metadata and both button
 // labels, and never the local path or the plugin's own links.
 func TestPresencePayloadContainsOnlyPublicTrackMetadata(t *testing.T) {
