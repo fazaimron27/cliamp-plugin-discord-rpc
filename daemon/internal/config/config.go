@@ -43,6 +43,13 @@ const (
 // beats before a crashed Cliamp stops being reported as playing.
 const DefaultStateMaxAge = 45 * time.Second
 
+// DefaultStatusFile is where the daemon writes what it last knew about its
+// Discord connection, below the user's home directory. The Lua plugin composes
+// the same path in its own source, and the contract test beside the plugin holds
+// the two together: a daemon writing where the plugin does not read would leave
+// the indicator silent with nothing to say why.
+const DefaultStatusFile = ".local/share/cliamp/rpc-status.json"
+
 // Config contains all runtime settings needed by the daemon.
 type Config struct {
 	// ShowVersion asks the caller to print the version and exit instead of
@@ -72,6 +79,12 @@ type Config struct {
 	StatePath string
 	// StateMaxAge is how long a document stays live after its last heartbeat.
 	StateMaxAge time.Duration
+	// StatusPath is the document the daemon writes its Discord connection state
+	// to, for the Lua plugin to read and show as a message. Like the state path
+	// it has no flag and no environment variable: the plugin reads a path of its
+	// own, so an override made from this side could only be one the plugin
+	// cannot see, leaving the two halves pointed at different files.
+	StatusPath string
 }
 
 // Where a transport value came from.
@@ -206,6 +219,7 @@ func Load(args []string) (Config, error) {
 	if cfg.StatePath == "" {
 		cfg.StatePath = filepath.Join(home, ".local", "share", "cliamp", "rpc-state.json")
 	}
+	cfg.StatusPath = filepath.Join(home, filepath.FromSlash(DefaultStatusFile))
 	if cfg.StateMaxAge <= 0 {
 		return Config{}, errors.New("max age must be positive")
 	}

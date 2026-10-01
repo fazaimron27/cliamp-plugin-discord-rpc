@@ -26,6 +26,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/status"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/tracklink"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
@@ -103,6 +104,17 @@ type discordClient interface {
 	SetActivity(*presence.Activity) error
 	ClearActivity() error
 	Close() error
+}
+
+// statusReporter records what the daemon last knew about its Discord
+// connection, for the Lua plugin to read and show as a message.
+//
+// It is told only what the loop observed, never what it assumed: a daemon that
+// has not yet tried to reach Discord has no connection to report, and saying so
+// is the difference between a plugin that stays quiet and one that announces a
+// disconnection nobody saw.
+type statusReporter interface {
+	Set(status.State)
 }
 
 // artworkResolver supplies the artwork, the track page and the artist page for
@@ -221,7 +233,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cfg.LastFMAPIKey == "" {
 		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
-	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), newResolver(cfg), time.Now, presenceRefresh)
+	reporter := status.New(cfg.StatusPath, status.Beat, time.Now)
+	go reporter.Report(ctx)
+	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), newResolver(cfg), reporter, time.Now, presenceRefresh)
 }
 
 // newResolver builds the artwork resolver the daemon runs with. It is a
@@ -246,6 +260,19 @@ func newResolver(cfg config.Config) artwork.Resolver {
 // below covers both — the file transport fails while the directory its document
 // lives in does not exist yet.
 //
+// What Discord did is reported as well as logged, because the plugin that runs
+// inside Cliamp cannot read this journal and the reporter is its only word on
+// whether presence is working. The loop is the only thing that knows: it is the
+// side that dials Discord, and it reports the connection on the three outcomes
+// that establish one — a handshake it could not complete, a publish the socket
+// died under, and a publish that landed. A clear is a request like any other and
+// is reported the same way.
+//
+// Nothing is reported before the first of those. The daemon connects only when
+// it has something to publish, so a quiet session never reaches Discord at all,
+// and a loop that called that silence a disconnection would tell the plugin
+// presence was down every time the daemon started with nothing playing.
+//
 // Artwork is looked up by a goroutine and delivered back here as a result tagged
 // with the track it was asked about. The tag is what lets the loop discard an
 // answer that arrived after the track changed, and the sending side abandons its
@@ -267,7 +294,7 @@ func newResolver(cfg config.Config) artwork.Resolver {
 // Last.fm had the artwork. The refresh passes artworkTrack as the identity to
 // match the reply against, not as the artist: it names the track the loop is
 // currently showing.
-func run(ctx context.Context, cfg config.Config, client discordClient, resolver artworkResolver, now func() time.Time, refresh time.Duration) error {
+func run(ctx context.Context, cfg config.Config, client discordClient, resolver artworkResolver, reporter statusReporter, now func() time.Time, refresh time.Duration) error {
 	defer client.Close()
 
 	var states <-chan playback.State
@@ -331,6 +358,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			if err := client.ClearActivity(); err != nil {
 				log.Printf("clear Discord presence: %v", err)
 				_ = client.Close()
+				reporter.Set(status.Disconnected)
 			}
 		}
 		publishedKey = "clear"
@@ -361,6 +389,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			return
 		}
 		if err := client.Connect(ctx); err != nil {
+			reporter.Set(status.Disconnected)
 			reset(refreshTimer, time.Second)
 			return
 		}
@@ -368,9 +397,11 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		if err := client.SetActivity(activity); err != nil {
 			log.Printf("update Discord presence: %v", err)
 			_ = client.Close()
+			reporter.Set(status.Disconnected)
 			reset(refreshTimer, time.Second)
 			return
 		}
+		reporter.Set(status.Connected)
 		publishedKey = desiredKey
 		publishedAt = currentTime
 		reset(refreshTimer, refresh)

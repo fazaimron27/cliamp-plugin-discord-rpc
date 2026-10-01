@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/status"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -193,7 +195,7 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, presenceRefresh)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, noStatus{}, time.Now, presenceRefresh)
 	}()
 
 	expected := "discord-rpc " + version.Explain(version.PluginBehind, "1.4.0", version.Number)
@@ -554,7 +556,7 @@ func startDaemon(t *testing.T, socket string, resolver artworkResolver, refresh 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, resolver, time.Now, refresh)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, resolver, noStatus{}, time.Now, refresh)
 	}()
 	return client
 }
@@ -879,5 +881,168 @@ func TestNewResolverAsksThePlayerOverTheConfiguredSocket(t *testing.T) {
 	}
 	if info.Image != "https://i.scdn.co/image/x" {
 		t.Errorf("Image = %q; want the player's artwork", info.Image)
+	}
+}
+
+// noStatus is the reporter for the tests that are not about the connection
+// report. It is a no-op rather than nil because the loop reports on every
+// publish: a nil there would panic the daemon's own goroutine and say nothing
+// about which test forgot it.
+type noStatus struct{}
+
+func (noStatus) Set(status.State) {}
+
+// fakeStatus records what the daemon told the connection reporter, in order. The
+// order is the point: the plugin's message is a transition between two of these,
+// and the last value alone cannot show one.
+type fakeStatus struct {
+	mu     sync.Mutex
+	states []status.State
+}
+
+func (f *fakeStatus) Set(state status.State) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.states = append(f.states, state)
+}
+
+// last returns the state the daemon settled on, and whether it ever named one.
+// A daemon that has told the reporter nothing is a different claim from one that
+// told it Discord is down, and the plugin acts on that difference, so the two
+// have to be distinguishable here.
+func (f *fakeStatus) last() (status.State, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.states) == 0 {
+		return status.Unknown, false
+	}
+	return f.states[len(f.states)-1], true
+}
+
+// failingDiscord is a Discord a test can break one step at a time: a handshake
+// it never gets, a publish the socket dies under, or a clear that does not land.
+// Each is a different thing to know about Discord, and the reporter has to be
+// told the truth about all three.
+type failingDiscord struct {
+	connect error
+	set     error
+	clear   error
+}
+
+func (f *failingDiscord) Connected() bool                      { return true }
+func (f *failingDiscord) Connect(context.Context) error        { return f.connect }
+func (f *failingDiscord) Close() error                         { return nil }
+func (f *failingDiscord) SetActivity(*presence.Activity) error { return f.set }
+func (f *failingDiscord) ClearActivity() error                 { return f.clear }
+
+// startDaemonReporting is startDaemon with the connection reporter in the
+// caller's hands. What the daemon tells it is what the plugin goes on to read,
+// and none of it is visible through the Discord fake, so a test that is about
+// the report has to hold the reporter itself.
+func startDaemonReporting(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration, client discordClient, reporter statusReporter) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, resolver, reporter, time.Now, refresh)
+	}()
+}
+
+// A publish Discord accepts is the daemon's only evidence that Discord is
+// reachable, and it is the first thing the plugin can be told: until something
+// is sent there is nothing to know.
+func TestRunReportsAConnectionOnceDiscordTakesAnActivity(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	reporter := &fakeStatus{}
+	startDaemonReporting(t, socket, noArtwork{}, presenceRefresh, &fakeDiscord{}, reporter)
+
+	session.publish(t, playingSnapshot("Track"))
+
+	waitFor(t, "the reporter to hear that Discord took the activity", func() bool {
+		state, ok := reporter.last()
+		return ok && state == status.Connected
+	})
+}
+
+// A Discord that cannot be reached at all is the state the indicator exists to
+// show, and it is known as soon as the handshake is refused.
+func TestRunReportsADisconnectionWhenDiscordCannotBeReached(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	reporter := &fakeStatus{}
+	client := &failingDiscord{connect: errors.New("Discord IPC unavailable: no Discord IPC socket candidates")}
+	startDaemonReporting(t, socket, noArtwork{}, presenceRefresh, client, reporter)
+
+	session.publish(t, playingSnapshot("Track"))
+
+	waitFor(t, "the reporter to hear that Discord could not be reached", func() bool {
+		state, ok := reporter.last()
+		return ok && state == status.Disconnected
+	})
+}
+
+// A socket that dies under a publish is the connection going away, which is what
+// the daemon answers by closing it. Reporting the connection as still up would
+// leave the plugin showing a live Discord that is no longer there.
+func TestRunReportsADisconnectionWhenAPublishDropsTheConnection(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	reporter := &fakeStatus{}
+	client := &failingDiscord{set: errors.New("write unix /run/user/1000/discord-ipc-0: broken pipe")}
+	startDaemonReporting(t, socket, noArtwork{}, presenceRefresh, client, reporter)
+
+	session.publish(t, playingSnapshot("Track"))
+
+	waitFor(t, "the reporter to hear that the publish dropped the connection", func() bool {
+		state, ok := reporter.last()
+		return ok && state == status.Disconnected
+	})
+}
+
+// A clear is a request to Discord like any other, so a clear that fails for a
+// transport reason is the connection going away. This one is the likeliest of
+// the three to be missed, because a clear is what a pause sends and the pause
+// looks like the quiet path.
+func TestRunReportsADisconnectionWhenClearingFails(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	reporter := &fakeStatus{}
+	client := &failingDiscord{clear: errors.New("write unix /run/user/1000/discord-ipc-0: broken pipe")}
+	startDaemonReporting(t, socket, noArtwork{}, presenceRefresh, client, reporter)
+
+	session.publish(t, playingSnapshot("Track"))
+	waitFor(t, "the reporter to hear that Discord took the activity", func() bool {
+		state, ok := reporter.last()
+		return ok && state == status.Connected
+	})
+
+	session.publish(t, stoppedSnapshot("Track"))
+
+	waitFor(t, "the reporter to hear that the clear failed", func() bool {
+		state, ok := reporter.last()
+		return ok && state == status.Disconnected
+	})
+}
+
+// The daemon connects only when it has something to publish, so a quiet session
+// never reaches Discord at all. The reporter must be told nothing rather than
+// told Discord is down: the plugin reads the two differently, and a daemon that
+// announced a disconnection it never observed would cry wolf on every start with
+// nothing playing.
+func TestRunReportsNothingBeforeItHasTriedDiscord(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "cliamp.sock")
+	session := serveCliampSession(t, socket)
+	reporter := &fakeStatus{}
+	client := &fakeDiscord{}
+	startDaemonReporting(t, socket, noArtwork{}, presenceRefresh, client, reporter)
+
+	session.publish(t, stoppedSnapshot("Track"))
+
+	waitFor(t, "the daemon to handle the stopped snapshot", func() bool {
+		return client.cleared() > 0
+	})
+	if state, ok := reporter.last(); ok {
+		t.Fatalf("reporter was told %v before Discord was ever tried", state)
 	}
 }
