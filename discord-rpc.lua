@@ -193,7 +193,9 @@ end
 --
 -- Anything unreadable is nil for the same reason: a document that is missing,
 -- refused by the decoder, or of a shape this plugin does not know says nothing
--- about Discord, and a stale one says only that the daemon stopped writing.
+-- about Discord. A stale beat is the one case that does speak, and what it says
+-- is that the daemon stopped writing — nothing is showing on Discord either
+-- way, so believing the connection it still names would be the lie.
 local function statusOf()
   -- The whole read is guarded because it crosses into Cliamp's API, where a
   -- build too old to have these functions answers by raising rather than by

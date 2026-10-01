@@ -23,6 +23,15 @@ Cliamp events
        -> Discord SET_ACTIVITY
 ```
 
+The one direction nothing else covers is Discord back to Cliamp:
+
+```text
+Discord connection
+  -> cliamp-rpcd: writes ~/.local/share/cliamp/rpc-status.json
+       -> discord-rpc.lua: cliamp.fs.read, every 5 s
+            -> cliamp.message("Discord connected" / "Discord disconnected")
+```
+
 The root-level `discord-rpc.lua` file is also the repository entrypoint required
 by Cliamp's `cliamp-plugin-<name>` install-source convention. The `ipc`
 transport requires the retained plugin event pub/sub API merged into Cliamp's
@@ -141,6 +150,42 @@ one keeps working across the upgrade. Documents from that line carry no
 `plugin_version`, so the version warning stays silent for them, exactly as it
 does for an `ipc` snapshot from a plugin that predates the report.
 
+## Status File Contract
+
+The two halves need one more channel in the other direction, for the connection
+rather than the playback: the plugin runs inside Cliamp and the daemon beside
+it, and nothing carries a fact back across that boundary. Cliamp's pub/sub lets
+a plugin publish and offers a subscriber only to a native client. So the daemon
+writes `~/.local/share/cliamp/rpc-status.json` and the plugin polls it. The path
+has no config key: the plugin composes it in its own source, so an override from
+the daemon's side could only be one the plugin cannot see, leaving the two
+halves pointed at different files.
+
+- `beat` is Unix seconds, rewritten on a 5-second timer whether or not the
+  connection changed. It is the point of the file: what the plugin has to
+  notice is a daemon that stopped, and a state written once at startup would go
+  on reading as a live connection for as long as nobody looked.
+- `connected` is a boolean, and it is absent until the daemon has tried to
+  reach Discord. The daemon connects lazily, when it first has something to
+  publish, so a quiet session never reaches Discord at all; reporting that as
+  `false` would announce an outage every time the daemon started with nothing
+  playing.
+- `v` declares the document's schema, currently 1. A plugin that does not
+  recognise it ignores the file, which is what an older plugin does anyway: it
+  never looks.
+
+The plugin believes a connection only while the beat is fresh — three beats,
+the same tolerance the state document's window gives — so a daemon killed
+mid-session stops being read as connected. A stale beat is a `false`, since
+presence is not working either way. A document that is missing, malformed, or
+of an unknown schema is silence rather than a change, because none of those is
+a fact about Discord.
+
+Writes land by rename, so a plugin polling on a clock of its own never reads a
+half-written file. The plugin says one message per change and remembers what it
+last said in `cliamp.store`, which is what keeps a Cliamp restart from
+re-announcing the connection every session begins with.
+
 ## Repository Layout
 
 ```text
@@ -156,7 +201,10 @@ cliamp-plugin-discord-rpc/
 │       ├── playback/
 │       ├── presence/
 │       ├── statewatch/
-│       └── tracklink/
+│       ├── status/
+│       ├── style/
+│       ├── tracklink/
+│       └── version/
 ├── docs/
 ├── discord-rpc.lua
 ├── install.sh
@@ -183,6 +231,10 @@ cliamp-plugin-discord-rpc/
   the same interface as the subscription — a channel of playback snapshots — so
   the run loop does not branch on the transport, and it owns the document's
   liveness rules.
+- `daemon/internal/status` writes the document the plugin polls for the Discord
+  connection, and keeps its beat moving. It is told only what the run loop
+  observed, never what it assumed, so a daemon that has not reached Discord yet
+  reports nothing rather than an outage.
 - `daemon/internal/playback` validates snapshots and derives private identity
   and public presence keys.
 - `daemon/internal/presence` builds typed Discord Listening activities.
@@ -195,7 +247,8 @@ cliamp-plugin-discord-rpc/
 - `daemon/internal/discord` implements socket discovery, framing, handshake,
   and `SET_ACTIVITY` over Discord IPC.
 - `daemon/internal/daemon` coordinates subscriptions, artwork, timelines,
-  reconnects, refreshes, and activity clearing. It also owns the `--check`
+  reconnects, refreshes, and activity clearing, and reports the Discord
+  connection to the status document as it goes. It also owns the `--check`
   diagnostic, which probes the same transports in isolation and reports them
   without starting the run loop.
 
@@ -347,7 +400,12 @@ Last.fm key, since a successful lookup returns an artist page almost every time.
 
 Discord connection failures leave the daemon running. Presence refresh retries
 reconnect even when playback state does not change. Failed activity updates
-close the current Discord connection so the next attempt starts cleanly.
+close the current Discord connection so the next attempt starts cleanly. Those
+outcomes are also what the plugin's status message is drawn from: the daemon
+reports the connection on the three that establish one — a handshake it could
+not complete, a publish the socket died under, and a publish that landed — and
+reports nothing before them, so a daemon that has not tried Discord is not
+mistaken for one that failed.
 
 Cliamp subscription failures also leave the daemon running. It reconnects with
 bounded backoff, clears stale Discord activity when the stream closes, and gets
@@ -383,7 +441,10 @@ harness is `daemon/internal/playback/testdata/lua`, driven by
 keys are exactly the ones the daemon accepts, that nothing the daemon would
 reject is published, and that a scenario publishing nothing is caught rather
 than passing vacuously. A field renamed on either side of the Lua/Go boundary
-fails there.
+fails there. The same pattern covers the two documents — the stub Cliamp in
+`daemon/internal/statewatch/testdata` for the one the plugin writes, and the one
+in `daemon/internal/status/testdata` for the one it reads — along with the text
+agreements beside each, which hold wherever the Lua cannot be run at all.
 
 Those tests need `luajit` and skip without it, so a local `go test ./...` can
 pass with them unrun. CI installs `luajit` and sets `CLIAMP_REQUIRE_LUA`, which
