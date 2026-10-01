@@ -246,6 +246,16 @@ func newResolver(cfg config.Config) artwork.Resolver {
 // below covers both — the file transport fails while the directory its document
 // lives in does not exist yet.
 //
+// A connection lost while the player is quiet is looked for from the quiet path
+// too, because nothing else will ask: a paused player publishes no further
+// events, and the clear that follows one stops the refresh timer that would
+// otherwise come round again. So a clear retries the dial itself, which is what
+// lets the loop reach Discord again without waiting for playback to resume.
+// That retry is armed only once the loop has reached Discord at least once:
+// dialing one it has no use for is the cry this loop exists to avoid, and the
+// record of having reached it is what tells a lost connection from one never
+// opened.
+//
 // Artwork is looked up by a goroutine and delivered back here as a result tagged
 // with the track it was asked about. The tag is what lets the loop discard an
 // answer that arrived after the track changed, and the sending side abandons its
@@ -278,6 +288,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	var publishedAt time.Time
 	reconnectDelay := time.Second
 	var watch versionWatch
+	var discordTried bool
 
 	resolved := make(chan artworkResult, 1)
 	var artworkTrack string
@@ -326,7 +337,6 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	}
 
 	clear := func() {
-		reset(refreshTimer, 0)
 		if client.Connected() && publishedKey != "clear" {
 			if err := client.ClearActivity(); err != nil {
 				log.Printf("clear Discord presence: %v", err)
@@ -335,6 +345,13 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		}
 		publishedKey = "clear"
 		publishedAt = now()
+		if !client.Connected() && discordTried {
+			if err := client.Connect(ctx); err != nil {
+				reset(refreshTimer, time.Second)
+				return
+			}
+		}
+		reset(refreshTimer, 0)
 	}
 
 	reconcile := func() {
@@ -360,6 +377,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			reset(refreshTimer, refresh-currentTime.Sub(publishedAt))
 			return
 		}
+		discordTried = true
 		if err := client.Connect(ctx); err != nil {
 			reset(refreshTimer, time.Second)
 			return
