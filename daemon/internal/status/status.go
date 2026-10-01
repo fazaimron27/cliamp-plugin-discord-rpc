@@ -31,10 +31,12 @@ import (
 // daemon could outrun would report a healthy connection as a stopped daemon.
 const Beat = 5 * time.Second
 
-// schemaVersion is the document's shape, which the plugin refuses to read unless
+// SchemaVersion is the document's shape, which the plugin refuses to read unless
 // it recognizes it. A change here is a change to what the plugin parses, so the
-// two move together or the plugin ignores the file.
-const schemaVersion = 1
+// two move together or the plugin ignores the file. It is exported because the
+// contract test beside the plugin reads it to hold the two halves to each other,
+// the way the playback document's schema already is.
+const SchemaVersion = 1
 
 // State is what the daemon last knew about its Discord connection.
 type State int
@@ -108,7 +110,7 @@ func (r *Reporter) write() {
 	state := r.state
 	r.mu.Unlock()
 	payload, err := json.Marshal(document{
-		Version:   schemaVersion,
+		Version:   SchemaVersion,
 		Beat:      r.now().Unix(),
 		Connected: connection(state),
 	})

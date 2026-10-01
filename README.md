@@ -144,6 +144,11 @@ Keep this terminal open while using the daemon and press `Ctrl+C` to stop it.
 Pausing or stopping playback clears the activity, and the daemon reconnects on
 its own if Cliamp or Discord is restarted.
 
+Cliamp's status bar says the same thing: `Discord connected` once the daemon
+reaches Discord, and `Discord disconnected` when it cannot, including when the
+daemon itself stops. The message appears on a change only, so a connection that
+is working is not repeated.
+
 With [`transport = "file"`](#choose-the-playback-transport), the first line
 names the state document instead of the socket and the second reads `watching
 for Cliamp state in <path>`: the daemon is reading the document rather than
@@ -469,8 +474,14 @@ By default those snapshots travel over Cliamp's IPC broker, and the subscription
 doubles as the liveness signal: pausing or stopping clears activity, and an
 unclean Cliamp exit closes the stream and clears activity immediately. With
 `transport = "file"` they are written to a state document the daemon watches
-instead, and a heartbeat in that document stands in for the connection. Nothing
-is written to disk unless that transport is selected.
+instead, and a heartbeat in that document stands in for the connection.
+
+The daemon writes one document of its own either way: what it last knew about
+its Discord connection, in `~/.local/share/cliamp/rpc-status.json`, beating on a
+clock of its own. The plugin reads it and shows the message above when that
+connection changes, and when the beat stops — which is how a Cliamp running
+quietly can still say whether presence is working. Nothing else is written to
+disk.
 
 The contract behind all of it — the snapshot's fields, the document's schema,
 package responsibilities, and failure behavior — is in

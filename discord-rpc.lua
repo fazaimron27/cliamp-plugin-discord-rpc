@@ -28,6 +28,25 @@ local HEARTBEAT_SECS = 15
 local STATE_DIR = (os.getenv("HOME") or "") .. "/.local/share/cliamp"
 local STATE_PATH = STATE_DIR .. "/rpc-state.json"
 
+-- The document cliamp-rpcd writes its Discord connection to, and the pace at
+-- which this plugin reads it. The path is the daemon's own default composed the
+-- same way, and the contract test beside the daemon holds the two together: a
+-- plugin reading where the daemon does not write would say nothing about a
+-- Discord that was working.
+--
+-- Three beats of staleness, the same tolerance the playback document's window
+-- gives: one missed beat is a slow write, and only a beat that has stopped for
+-- three is a daemon that stopped. The poll runs at the daemon's own beat, so a
+-- transition is seen within a beat of being written and a stopped daemon within
+-- the threshold after that; anything faster would only read the same document
+-- twice, and the contract test refuses a poll slower than the threshold, since
+-- that would leave a disconnection unsaid for an interval after the document
+-- had already shown it.
+local STATUS_SCHEMA_VERSION = 1
+local STATUS_POLL_SECS = 5
+local STATUS_STALE_SECS = 15
+local STATUS_PATH = STATE_DIR .. "/rpc-status.json"
+
 local p = plugin.register({
   name = "discord-rpc",
   version = VERSION,
@@ -157,8 +176,112 @@ if TRANSPORT == "file" then
   end
 end
 
+-- What cliamp-rpcd last knew about its Discord connection, read from the
+-- document it writes. The daemon runs beside Cliamp rather than inside it, and
+-- nothing carries a fact back across that boundary: Cliamp's pub/sub lets this
+-- plugin publish, and offers a subscriber only to a native client. A file both
+-- halves can name is therefore the channel, which is the one the file transport
+-- already uses in the other direction.
+--
+-- It answers what the document says about the connection: true, false, or nil
+-- for a document that does not speak to it. Nil is not a third kind of
+-- connection, it is this plugin having nothing to report, which is why the
+-- three cases are kept apart rather than collapsed into a boolean. A daemon
+-- that has not yet reached Discord writes a beat with no connection at all, so
+-- reading that as "disconnected" would put a Discord outage on screen every
+-- time the daemon started with nothing playing.
+--
+-- Anything unreadable is nil for the same reason: a document that is missing,
+-- refused by the decoder, or of a shape this plugin does not know says nothing
+-- about Discord, and a stale one says only that the daemon stopped writing.
+local function statusOf()
+  -- The whole read is guarded because it crosses into Cliamp's API, where a
+  -- build too old to have these functions answers by raising rather than by
+  -- returning.
+  local ok, document = pcall(function()
+    local raw = cliamp.fs.read(STATUS_PATH)
+    if raw == nil then
+      return nil
+    end
+    return cliamp.json.decode(raw)
+  end)
+  if not ok or type(document) ~= "table" then
+    return nil
+  end
+  if document.v ~= STATUS_SCHEMA_VERSION then
+    return nil
+  end
+  local beat = tonumber(document.beat)
+  if beat == nil then
+    return nil
+  end
+  if os.time() - beat > STATUS_STALE_SECS then
+    return false
+  end
+  -- Only a real boolean speaks: a document carrying anything else has a shape
+  -- this plugin does not understand, and inventing a disconnection from it
+  -- would be the one wrong answer that shows on screen.
+  if document.connected ~= true and document.connected ~= false then
+    return nil
+  end
+  return document.connected
+end
+
+-- The connection this plugin last said out loud, kept in cliamp.store rather
+-- than in a local because a Cliamp restart would otherwise forget it: the state
+-- most sessions begin in is a working connection, so announcing it again on
+-- every start is the message a user would learn to ignore.
+local function spoken()
+  if cliamp.store == nil then
+    return nil
+  end
+  return cliamp.store.get("connected")
+end
+
+-- Says the connection, and remembers having said it. A Cliamp without
+-- cliamp.message cannot show anything, and losing presence over a status line
+-- would be a far worse trade than losing the status line.
+local function say(connected)
+  if cliamp.store ~= nil then
+    cliamp.store.set("connected", connected)
+  end
+  if cliamp.message ~= nil then
+    cliamp.message(connected and "Discord connected" or "Discord disconnected")
+  end
+end
+
+local function check()
+  local connected = statusOf()
+  if connected == nil or connected == spoken() then
+    return
+  end
+  say(connected)
+end
+
+-- Arm the poll once. The daemon connects only when it has something to publish,
+-- so this is what lets a quiet session still learn that presence works, and
+-- what notices the daemon stopping while Cliamp stays open.
+--
+-- The immediate check is what carries the feature on a Cliamp with no timer at
+-- all, where the poll below cannot be armed: that Cliamp learns the connection
+-- once at startup and never notices it changing, which is a poorer indicator
+-- but not a broken plugin. Everything this reads is guarded the same way, since
+-- a plugin that raised here would take the playback publications down with it.
+local watching = false
+local function watchStatus()
+  if watching then
+    return
+  end
+  watching = true
+  check()
+  if cliamp.timer ~= nil then
+    cliamp.timer.every(STATUS_POLL_SECS, check)
+  end
+end
+
 p:on("app.start", function()
   start()
+  watchStatus()
 end)
 
 p:on("track.change", function(event)
