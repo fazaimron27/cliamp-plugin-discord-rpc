@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
-	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -25,18 +24,6 @@ import (
 type fakeValidator struct{ err error }
 
 func (f fakeValidator) Validate(context.Context) error { return f.err }
-
-// unreachableDiscord fails to connect, standing in for a desktop session with
-// no Discord client running.
-type unreachableDiscord struct{}
-
-func (unreachableDiscord) Connected() bool { return false }
-func (unreachableDiscord) Connect(context.Context) error {
-	return errors.New("Discord IPC unavailable: no Discord IPC socket candidates")
-}
-func (unreachableDiscord) SetActivity(*presence.Activity) error { return nil }
-func (unreachableDiscord) ClearActivity() error                 { return nil }
-func (unreachableDiscord) Close() error                         { return nil }
 
 // serveCheckCliamp stands up the v2 handshake harness on a fresh socket and
 // returns the socket path. The harness replays one snapshot carrying
@@ -62,7 +49,7 @@ func TestCheckPassesInAHealthyEnvironment(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+	code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out)
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
@@ -92,7 +79,7 @@ func TestCheckRedactsTheApplicationID(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+	check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out)
 
 	if strings.Contains(out.String(), config.DefaultApplicationID) {
 		t.Fatalf("report exposes the full application ID:\n%s", out.String())
@@ -107,7 +94,7 @@ func TestCheckFailsWhenDiscordIsUnavailable(t *testing.T) {
 	cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
 
 	var out bytes.Buffer
-	code := check(context.Background(), cfg, unreachableDiscord{}, fakeValidator{}, &out)
+	code := check(context.Background(), cfg, newFakeDiscord().refuseConnect(errDiscordUnreachable), fakeValidator{}, &out)
 
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1\n%s", code, out.String())
@@ -130,7 +117,7 @@ func TestCheckFailsWhenCliampIsUnreachable(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+	code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out)
 
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1\n%s", code, out.String())
@@ -151,7 +138,7 @@ func TestCheckWarnsButPassesWhenLastFMKeyIsRejected(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{err: errors.New("Last.fm rejected the API key: Invalid API key (code 10)")}, &out)
+	code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{err: errors.New("Last.fm rejected the API key: Invalid API key (code 10)")}, &out)
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
@@ -170,7 +157,7 @@ func TestCheckWarnsWhenNoLastFMKeyIsConfigured(t *testing.T) {
 	cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
 
 	var out bytes.Buffer
-	code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{err: errors.New("must not be called")}, &out)
+	code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{err: errors.New("must not be called")}, &out)
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
@@ -199,7 +186,7 @@ func TestCheckNamesTheStaleHalfOnVersionSkew(t *testing.T) {
 			cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
 
 			var out bytes.Buffer
-			code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+			code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out)
 
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
@@ -236,7 +223,7 @@ func TestVersionMessagingSpeaksWithOneVoice(t *testing.T) {
 			socket := serveCheckCliamp(t, test.plugin)
 			cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
 			var out bytes.Buffer
-			check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+			check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out)
 			if !strings.Contains(out.String(), explained) {
 				t.Errorf("the check report does not say %q:\n%s", explained, out.String())
 			}
@@ -253,7 +240,7 @@ func TestCheckStaysQuietOnAMatchingPluginLine(t *testing.T) {
 	cfg := config.Config{ApplicationID: config.DefaultApplicationID, CliampSocket: socket}
 
 	var out bytes.Buffer
-	code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+	code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out)
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
@@ -327,7 +314,7 @@ func TestCheckReportsWhetherTheConfigFileIsReadable(t *testing.T) {
 			}
 
 			var out bytes.Buffer
-			if code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out); code != 0 {
+			if code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out); code != 0 {
 				t.Fatalf("exit code = %d, want 0\n%s", code, out.String())
 			}
 

@@ -36,7 +36,7 @@ func stateFileConfig(path string) config.Config {
 func runCheckReport(t *testing.T, cfg config.Config) (int, string) {
 	t.Helper()
 	var out bytes.Buffer
-	code := check(context.Background(), cfg, &fakeDiscord{}, fakeValidator{}, &out)
+	code := check(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &out)
 	return code, out.String()
 }
 
