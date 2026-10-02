@@ -36,15 +36,39 @@ type State struct {
 }
 
 // Validate rejects malformed or unreasonably large plugin payloads.
+//
+// The bounded text fields are listed once and held to both of their rules by
+// two passes over that one list, so a field cannot be added to one rule and
+// left out of the other. The passes run the length rule before the NUL rule,
+// which keeps the error for a payload that breaks both the message it has
+// always been.
+//
+// Status is not in the list. The allowlist above admits three literals, so a
+// status that was oversized or carried a NUL has already been refused by the
+// time either pass runs, and a row for it would pin nothing.
 func (s State) Validate() error {
 	if s.Status != "playing" && s.Status != "paused" && s.Status != "stopped" {
 		return errors.New("playback snapshot contains an invalid status")
 	}
-	if len(s.Status) > 32 || len(s.Title) > 4096 || len(s.Artist) > 4096 || len(s.Album) > 4096 || len(s.Path) > 16384 || len(s.PluginVersion) > 32 {
-		return errors.New("playback snapshot contains oversized fields")
+	text := []struct {
+		value string
+		limit int
+	}{
+		{s.Title, 4096},
+		{s.Artist, 4096},
+		{s.Album, 4096},
+		{s.Path, 16384},
+		{s.PluginVersion, 32},
 	}
-	if strings.ContainsRune(s.Title, 0) || strings.ContainsRune(s.Artist, 0) || strings.ContainsRune(s.Album, 0) || strings.ContainsRune(s.Path, 0) || strings.ContainsRune(s.PluginVersion, 0) {
-		return errors.New("playback snapshot contains invalid text")
+	for _, field := range text {
+		if len(field.value) > field.limit {
+			return errors.New("playback snapshot contains oversized fields")
+		}
+	}
+	for _, field := range text {
+		if strings.ContainsRune(field.value, 0) {
+			return errors.New("playback snapshot contains invalid text")
+		}
 	}
 	if s.Duration < 0 || s.Duration > maxPlaybackSeconds || s.Position < 0 || s.Position > maxPlaybackSeconds || s.Year < 0 || s.Year > 9999 {
 		return errors.New("playback snapshot contains invalid numeric fields")
