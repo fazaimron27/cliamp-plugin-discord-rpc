@@ -470,9 +470,14 @@ func isASCIIAlphanumeric(character rune) bool {
 // same name Find puts on a Link, so renaming or removing a route fails the
 // artist search test, which drives Find and then ArtistSearch.
 //
-// The other direction is unguarded: a provider added to Find with no route
-// here would publish a provider track link beside a Last.fm artist link, and
-// no test would fail. Add the route with the provider.
+// Both directions are guarded now. A provider added to Find with no route
+// fails TestEveryProviderFindCanNameHasAnArtistRoute, which walks the
+// translation and page tables and requires each provider to be routed here or
+// named in routeLessProviders with a reason. What that guard cannot see is a
+// provider named inside a function rather than a table — the switch in
+// videoPath and the NetEase builder. Those reach a card only through a corpus
+// row, and TestEveryLinkableProviderHasAnArtistRoute already requires every
+// corpus row to be routed.
 var artistSearchRoutes = map[string]func(string) string{
 	spotifyName: func(name string) string {
 		return "https://open.spotify.com/search/" + url.PathEscape(name)

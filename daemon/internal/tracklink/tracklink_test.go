@@ -516,6 +516,50 @@ func TestEveryLinkableProviderHasAnArtistRoute(t *testing.T) {
 	}
 }
 
+// TestEveryProviderFindCanNameHasAnArtistRoute closes the direction the corpus
+// guard above cannot see.
+//
+// TestEveryLinkableProviderHasAnArtistRoute drives linkablePaths, so what it
+// covers is the corpus rather than the dispatch table: a provider added to a
+// table with no row there is invisible to it. This guard reads the tables
+// themselves — the URI translations and the page providers — so a provider
+// added to either is measured in the same commit, corpus row or not.
+//
+// It cannot see a provider named inside a function rather than a table. The
+// video switch and the NetEase builder name theirs in code, and those two
+// reach a card only through a corpus row, which the guard above requires to
+// be routed. So the gap that remains is a provider added in one of those two
+// places with no corpus row, and it is written here rather than left to be
+// found.
+func TestEveryProviderFindCanNameHasAnArtistRoute(t *testing.T) {
+	named := map[string]bool{}
+	for _, translation := range uriTranslations {
+		named[translation.provider] = true
+	}
+	for _, provider := range pageProviders {
+		named[provider.provider] = true
+	}
+	if len(named) == 0 {
+		t.Fatal("the dispatch tables named no provider; this guard walks nothing")
+	}
+	for name := range named {
+		t.Run(name, func(t *testing.T) {
+			if _, hasRoute := artistSearchRoutes[name]; hasRoute {
+				return
+			}
+			reason, documented := routeLessProviders[name]
+			if !documented {
+				t.Fatalf("%s is named by Find and has no artist route; add one "+
+					"to artistSearchRoutes or name it in routeLessProviders "+
+					"with a reason", name)
+			}
+			if strings.TrimSpace(reason) == "" {
+				t.Fatalf("%s is in routeLessProviders with no reason given", name)
+			}
+		})
+	}
+}
+
 // maxButtonLabel is Discord's cap on a rich presence button label, taken from
 // the Activity Button object in its gateway documentation: 1-32 characters.
 // labelVerb is the longest prefix internal/presence puts in front of a provider
