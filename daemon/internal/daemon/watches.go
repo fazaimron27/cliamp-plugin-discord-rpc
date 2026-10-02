@@ -1,10 +1,11 @@
 package daemon
 
-// This file holds the two report-once latches the loop writes through — one for
-// a plugin/daemon release-line mismatch, one for an activity Discord refused —
-// together with the release-line rendering and the install/update commands they
-// put in the warning text. The --check report reads normalize from here too,
-// since it words the same mismatch from the other side.
+// This file holds the report-once latch the loop's three reporters share —
+// a plugin/daemon release-line mismatch, an activity Discord refused, and an
+// unreachable Discord — together with the release-line rendering and the
+// install/update commands they put in the warning text. The --check report
+// reads normalize from here too, since it words the same mismatch from the
+// other side.
 
 import (
 	"fmt"
@@ -34,11 +35,51 @@ func tag(value string) string {
 	return "v" + normalize(value)
 }
 
+// latch remembers the one condition its holder last reported, so a condition
+// that persists is not reported again on every attempt to observe it.
+//
+// The three conditions this package latches differ — a release-line mismatch, a
+// refused activity, an unreachable Discord — but the rule is one rule: report a
+// condition the first time it is seen, stay quiet while it is the same
+// condition, and report it again once it has cleared and come back. A reporter
+// that forgot the last clause would fall silent exactly when the daemon began
+// failing again, which is the state its report exists to surface.
+//
+// The remembered value is a string rather than the condition itself because
+// what makes two conditions the same differs per reporter: a release is the
+// same release however it is spelled, so the version watch normalizes before
+// keying; a refusal is the same refusal when Discord's detail matches; an
+// outage is one outage for as long as it lasts, whatever reason the failing
+// dial gives, so the session keys it on the outage rather than the error.
+//
+// The empty string is the state of having reported nothing, so no caller may
+// key a latch on an empty condition: it would read as a repeat of the initial
+// silence. Every condition here is non-empty by construction.
+type latch struct {
+	reported string
+}
+
+// first reports whether key is a condition this latch has not reported, and
+// remembers it.
+func (l *latch) first(key string) bool {
+	if key == l.reported {
+		return false
+	}
+	l.reported = key
+	return true
+}
+
+// clear forgets the reported condition, so the same one after it is reported
+// again.
+func (l *latch) clear() {
+	l.reported = ""
+}
+
 // versionWatch reports a plugin/daemon release-line mismatch once per distinct
 // plugin version. Repeating it on every snapshot would bury the genuine error
 // traffic, and a mismatch is a one-time discovery rather than a per-track event.
 type versionWatch struct {
-	reported string
+	latch
 }
 
 // observe returns the warning to log for a plugin version, or an empty string
@@ -56,10 +97,9 @@ type versionWatch struct {
 // pointed at the plugin would have that user downgrade the half that is current.
 func (w *versionWatch) observe(pluginVersion string) string {
 	reported := normalize(pluginVersion)
-	if reported == "" || reported == w.reported {
+	if reported == "" || !w.first(reported) {
 		return ""
 	}
-	w.reported = reported
 	relation := version.Relate(reported, version.Number)
 	explained := version.Explain(relation, reported, version.Number)
 	switch relation {
@@ -89,22 +129,17 @@ func (w *versionWatch) observe(pluginVersion string) string {
 // that never cleared would fall silent exactly when the daemon began refusing
 // activities again, which is the state the report exists to surface.
 type rejectionWatch struct {
-	reported string
+	latch
 }
 
 // observe records a rejection and reports whether it is one still worth
 // logging, which is the first of its kind since the last accepted activity.
 func (w *rejectionWatch) observe(err error) bool {
-	detail := err.Error()
-	if detail == w.reported {
-		return false
-	}
-	w.reported = detail
-	return true
+	return w.first(err.Error())
 }
 
 // accepted records that Discord took an activity, so a rejection after it is
 // reported afresh.
 func (w *rejectionWatch) accepted() {
-	w.reported = ""
+	w.clear()
 }
