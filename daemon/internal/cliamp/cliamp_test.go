@@ -86,6 +86,43 @@ func TestCliampSubscriptionReceivesPlayback(t *testing.T) {
 	}
 }
 
+// The acknowledgment is read before any event, so one that answers a protocol
+// we do not speak, or that is addressed to a different request, must be refused
+// rather than taken as a completed handshake. Either would otherwise leave the
+// daemon reading playback for a request Cliamp may never have understood.
+//
+// Both cases carry ok:true, so nothing but the envelope rule can refuse them: a
+// rejected handshake would pass this test for the wrong reason.
+func TestCliampSubscriptionReportsEveryUnusableAck(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply string
+	}{
+		{
+			name:  "a version we do not speak",
+			reply: `{"version":1,"id":"discord-rpc-subscribe","ok":true}`,
+		},
+		{
+			name:  "an acknowledgment addressed to a different request",
+			reply: `{"version":2,"id":"discord-rpc-something-else","ok":true}`,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			socket := filepath.Join(t.TempDir(), "cliamp.sock")
+			serveConn(t, socket, func(conn net.Conn, _ cliampRequest) {
+				_, _ = conn.Write([]byte(testCase.reply + "\n"))
+			})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if _, err := cliampipc.Subscribe(ctx, socket, diag.Discard()); err == nil {
+				t.Fatal("Subscribe() accepted the acknowledgment; want an error")
+			}
+		})
+	}
+}
+
 // A rejected subscription must surface Cliamp's structured error rather than a
 // JSON decode failure caused by reading the v2 error object as a bare string.
 func TestCliampSubscriptionReportsProtocolError(t *testing.T) {

@@ -65,6 +65,30 @@ type event struct {
 	Data  json.RawMessage `json:"data"`
 }
 
+// checkEnvelope validates the parts of an answer frame that every response must
+// satisfy whatever it was an answer to: the protocol version, the reply ID when
+// the frame carries one, and the rejection branch.
+//
+// It is the one site for a rule the subscription acknowledgment and the state
+// request used to spell separately, right down to a byte-identical version
+// line. The subject names the request in the message, so a line still says
+// which half of the transport failed.
+func (r response) checkEnvelope(id, subject string) error {
+	if r.Version != protocolVersion {
+		return fmt.Errorf("Cliamp IPC response version %d, want %d", r.Version, protocolVersion)
+	}
+	if r.ID != "" && r.ID != id {
+		return fmt.Errorf("Cliamp %s response ID %q, want %q", subject, r.ID, id)
+	}
+	if !r.OK {
+		if r.Error == nil {
+			return fmt.Errorf("Cliamp rejected the %s request without an error", subject)
+		}
+		return fmt.Errorf("Cliamp rejected the %s request: %s: %s", subject, r.Error.Code, r.Error.Message)
+	}
+	return nil
+}
+
 // Subscribe connects to Cliamp and returns retained and live playback states.
 // The channel closes when Cliamp exits or the connection fails.
 //
@@ -118,17 +142,8 @@ func Subscribe(ctx context.Context, socketPath string, logger diag.Logger) (<-ch
 	if err := json.Unmarshal(scanner.Bytes(), &ack); err != nil {
 		return fail(fmt.Errorf("decode Cliamp subscription response: %w", err))
 	}
-	if ack.Version != protocolVersion {
-		return fail(fmt.Errorf("Cliamp IPC response version %d, want %d", ack.Version, protocolVersion))
-	}
-	if ack.ID != "" && ack.ID != subscriptionID {
-		return fail(fmt.Errorf("Cliamp subscription response ID %q, want %q", ack.ID, subscriptionID))
-	}
-	if !ack.OK {
-		if ack.Error == nil {
-			return fail(errors.New("Cliamp rejected subscription without an error"))
-		}
-		return fail(fmt.Errorf("Cliamp rejected subscription: %s: %s", ack.Error.Code, ack.Error.Message))
+	if err := ack.checkEnvelope(subscriptionID, "subscription"); err != nil {
+		return fail(err)
 	}
 	_ = conn.SetDeadline(time.Time{})
 

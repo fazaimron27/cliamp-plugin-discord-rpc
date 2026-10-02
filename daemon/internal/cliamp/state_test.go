@@ -100,6 +100,14 @@ func TestStateReportsEveryUnusableAnswer(t *testing.T) {
 			reply: `{"version":1,"id":"discord-rpc-state","ok":false,"error":{"code":"invalid_version","message":"unsupported"}}`,
 		},
 		{
+			name:  "a version we do not speak, with nothing else wrong with it",
+			reply: `{"version":1,"id":"discord-rpc-state","ok":true,"snapshot":{}}`,
+		},
+		{
+			name:  "an answer addressed to a different request",
+			reply: `{"version":2,"id":"discord-rpc-something-else","ok":true,"snapshot":{}}`,
+		},
+		{
 			name:  "a structured error",
 			reply: `{"version":2,"id":"discord-rpc-state","ok":false,"error":{"code":"unavailable","message":"no dispatcher"}}`,
 		},

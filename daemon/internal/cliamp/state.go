@@ -95,19 +95,11 @@ func State(ctx context.Context, socketPath string) (Snapshot, error) {
 }
 
 // checkState validates the parts of an answer that decide whether its snapshot
-// may be read at all.
+// may be read at all. The envelope is checked by the rule both callers share;
+// what is left here is the one requirement only a state answer has.
 func (r response) checkState() error {
-	if r.Version != protocolVersion {
-		return fmt.Errorf("Cliamp IPC response version %d, want %d", r.Version, protocolVersion)
-	}
-	if r.ID != "" && r.ID != stateID {
-		return fmt.Errorf("Cliamp state response ID %q, want %q", r.ID, stateID)
-	}
-	if !r.OK {
-		if r.Error == nil {
-			return errors.New("Cliamp rejected the state request without an error")
-		}
-		return fmt.Errorf("Cliamp rejected the state request: %s: %s", r.Error.Code, r.Error.Message)
+	if err := r.checkEnvelope(stateID, "state"); err != nil {
+		return err
 	}
 	if len(r.Snapshot) == 0 {
 		return errors.New("Cliamp state response carried no snapshot")
