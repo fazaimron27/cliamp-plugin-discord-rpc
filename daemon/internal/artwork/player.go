@@ -44,24 +44,27 @@ type Player struct {
 // answer whenever the player holds none, cannot be reached, or is describing a
 // different track. No failure here is reported: an absent socket, a build that
 // predates the request and a refused URL are all the absence of artwork, and
-// the caller falls through to Last.fm in every one of those cases.
-func (p *Player) Resolve(ctx context.Context, request Request) (TrackInfo, error) {
+// the caller falls through to Last.fm in every one of those cases. That is also
+// why this returns no error — every path out of it is a miss or an image, and a
+// signature that could describe a third outcome would be describing one that
+// does not exist.
+func (p *Player) Resolve(ctx context.Context, request Request) TrackInfo {
 	read := p.State
 	if read == nil {
 		read = cliampipc.State
 	}
 	snapshot, err := read(ctx, p.Socket)
 	if err != nil {
-		return TrackInfo{}, nil
+		return TrackInfo{}
 	}
 	if snapshot.Track.Path != request.Path {
-		return TrackInfo{}, nil
+		return TrackInfo{}
 	}
 	image := artworkURL(snapshot.Track.AlbumArtURL)
 	if image == "" {
-		return TrackInfo{}, nil
+		return TrackInfo{}
 	}
-	return TrackInfo{Image: image}, nil
+	return TrackInfo{Image: image}
 }
 
 // artworkURL returns raw only when it is a URL this daemon may publish and it
