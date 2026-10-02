@@ -300,6 +300,48 @@ func TestVersionWatchRendersReportedVersionCleanly(t *testing.T) {
 	}
 }
 
+// The three reporters in this package — a release-line mismatch, an activity
+// Discord refused, and an unreachable Discord — each report a condition once
+// and then stay quiet, and each report it again once it has cleared. That rule
+// lives in latch, so it is pinned here rather than only through the three
+// consumers, where a fourth caller could quietly get a different rule.
+func TestLatchReportsEachConditionOnce(t *testing.T) {
+	t.Run("a first sighting is reported", func(t *testing.T) {
+		var l latch
+		if !l.first("condition") {
+			t.Fatal("a first sighting was not reported")
+		}
+	})
+	t.Run("the same condition is not reported twice", func(t *testing.T) {
+		var l latch
+		l.first("condition")
+		if l.first("condition") {
+			t.Fatal("the same condition was reported twice")
+		}
+	})
+	t.Run("a different condition is reported", func(t *testing.T) {
+		var l latch
+		l.first("condition")
+		if !l.first("another") {
+			t.Fatal("a new condition was not reported")
+		}
+	})
+	t.Run("a condition that returns after clearing is reported", func(t *testing.T) {
+		var l latch
+		l.first("condition")
+		l.clear()
+		if !l.first("condition") {
+			t.Fatal("a condition that cleared and returned was not reported")
+		}
+	})
+	t.Run("an empty key is not a sighting against an empty latch", func(t *testing.T) {
+		var l latch
+		if l.first("") {
+			t.Fatal("an empty key was reported against an empty latch")
+		}
+	})
+}
+
 // A track playing straight through keeps its started-at anchor across
 // snapshots, a forward jump past the continuity tolerance re-anchors it as a
 // seek, a pause clears the anchor, and a resume anchors afresh — the rules that

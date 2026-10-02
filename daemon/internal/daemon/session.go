@@ -56,7 +56,7 @@ type session struct {
 	publishedAt  time.Time
 
 	rejections     rejectionWatch
-	unreachable    bool
+	unreachable    latch
 	reconnectDelay time.Duration
 	watched        versionWatch
 	triedDiscord   bool
@@ -169,6 +169,12 @@ func (s *session) requestArtwork(ctx context.Context, track string, request artw
 	}()
 }
 
+// unreachableDiscord is the latch key for a Discord the daemon cannot reach. It
+// names the outage rather than the failing dial's error, because every failed
+// dial is the same outage: the error text varies with the reason, and a latch
+// keyed on it would report again whenever the reason changed.
+const unreachableDiscord = "discord unreachable"
+
 // dialDiscord opens the socket, reporting an unreachable Discord once per
 // outage rather than once per attempt. Both dial paths retry on every failure
 // and Discord being closed is an ordinary state rather than a fault, so a line
@@ -178,13 +184,12 @@ func (s *session) requestArtwork(ctx context.Context, track string, request artw
 // surface.
 func (s *session) dialDiscord(ctx context.Context) error {
 	if err := s.client.Connect(ctx); err != nil {
-		if !s.unreachable {
+		if s.unreachable.first(unreachableDiscord) {
 			s.logger.Printf("connect to Discord: %v", err)
-			s.unreachable = true
 		}
 		return err
 	}
-	s.unreachable = false
+	s.unreachable.clear()
 	return nil
 }
 
