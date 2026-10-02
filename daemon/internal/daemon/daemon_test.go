@@ -9,7 +9,6 @@ package daemon
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,139 +29,10 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
-// syncBuffer collects log output written from the daemon's goroutine.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// fakeDiscord records published activities so a test can assert the daemon kept
-// working after a mismatch. Access is mutex-guarded because the daemon runs
-// concurrently with the test body under -race.
-type fakeDiscord struct {
-	mu         sync.Mutex
-	activities []presence.Activity
-	clearCalls int
-}
-
-func (f *fakeDiscord) Connected() bool               { return true }
-func (f *fakeDiscord) Connect(context.Context) error { return nil }
-func (f *fakeDiscord) Close() error                  { return nil }
-
-func (f *fakeDiscord) SetActivity(activity *presence.Activity) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.activities = append(f.activities, *activity)
-	return nil
-}
-
-func (f *fakeDiscord) ClearActivity() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.clearCalls++
-	return nil
-}
-
-// snapshot returns the published activities, oldest first. A copy, because the
-// daemon appends to the real slice from its own goroutine.
-func (f *fakeDiscord) snapshot() []presence.Activity {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]presence.Activity(nil), f.activities...)
-}
-
-func (f *fakeDiscord) published() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.activities)
-}
-
-func (f *fakeDiscord) cleared() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.clearCalls
-}
-
 // errDiscordUnreachable is the shape of what a real Connect returns when no
 // socket candidate accepts. The daemon reports whatever error it is handed, so
 // the wording matters only as the string the report has to carry.
 var errDiscordUnreachable = errors.New("Discord IPC unavailable: dial unix /run/user/1000/discord-ipc-0: connect: no such file or directory")
-
-// refusingDiscord models a Discord that is not running, and is the one fake that
-// does not connect. Every attempt is counted and every publication recorded,
-// because the property under test is how many times the daemon *reports* a
-// failure it keeps making: a report per attempt and a report per outage are
-// indistinguishable from a single attempt.
-type refusingDiscord struct {
-	mu        sync.Mutex
-	connects  int
-	published int
-	up        bool
-}
-
-func (f *refusingDiscord) Connected() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.up
-}
-
-func (f *refusingDiscord) Connect(context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.connects++
-	if f.up {
-		return nil
-	}
-	return errDiscordUnreachable
-}
-
-func (f *refusingDiscord) SetActivity(*presence.Activity) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.published++
-	return nil
-}
-
-func (f *refusingDiscord) ClearActivity() error { return nil }
-func (f *refusingDiscord) Close() error         { return nil }
-
-func (f *refusingDiscord) attempts() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.connects
-}
-
-func (f *refusingDiscord) activityCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.published
-}
-
-// returns brings Discord back, and leaves takes it away again, so a test can
-// put one outage on either side of a working connection.
-func (f *refusingDiscord) returns() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.up = true
-}
-
-func (f *refusingDiscord) leaves() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.up = false
-}
 
 // errActivityRejected is the client's own rejection type, carrying the detail
 // Discord sends for a payload it will not take. The daemon only ever sees this
@@ -172,214 +42,6 @@ var errActivityRejected = &discord.RejectionError{Detail: `{"code":4000,"message
 // errDiscordWrite is a transport failure rather than a refusal: the socket went
 // away mid-write, so there is nothing to keep and reconnecting is the answer.
 var errDiscordWrite = errors.New("write unix /run/user/1000/discord-ipc-0: broken pipe")
-
-// rejectingDiscord models a Discord that talks and refuses what it is told: the
-// socket and the handshake are accepted, every activity is turned down, and so
-// is every clear — a clear is a SET_ACTIVITY like any other, so the same rule
-// covers both call sites. That distinction is the one the daemon has to act on
-// — everything here is reachable and the payload is the problem — so the fake
-// records what the daemon does to the *socket* as well as what it sends.
-//
-// Connects and closes are counted rather than inferred because the wrong
-// behaviour is silent: reconnecting on a rejection looks exactly like a
-// successful publish from every input the daemon passes in, and only the count
-// of teardowns tells them apart. Accepting is a switch rather than a separate
-// fake so one test can put an accepted activity between two rejections.
-type rejectingDiscord struct {
-	mu        sync.Mutex
-	connects  int
-	closes    int
-	sets      int
-	clears    int
-	accepted  int
-	accepting bool
-	clearErr  error
-	up        bool
-}
-
-func (f *rejectingDiscord) Connected() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.up
-}
-
-func (f *rejectingDiscord) Connect(context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.connects++
-	f.up = true
-	return nil
-}
-
-func (f *rejectingDiscord) SetActivity(*presence.Activity) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sets++
-	if f.accepting {
-		f.accepted++
-		return nil
-	}
-	return errActivityRejected
-}
-
-func (f *rejectingDiscord) ClearActivity() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.clears++
-	if f.clearErr != nil {
-		return f.clearErr
-	}
-	return errActivityRejected
-}
-
-func (f *rejectingDiscord) Close() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.closes++
-	f.up = false
-	return nil
-}
-
-func (f *rejectingDiscord) clearCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.clears
-}
-
-// clearFailsWith makes the clear fail for a reason other than Discord refusing
-// it, which is the case that must still be answered by reconnecting.
-func (f *rejectingDiscord) clearFailsWith(err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.clearErr = err
-}
-
-func (f *rejectingDiscord) attempts() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.sets
-}
-
-func (f *rejectingDiscord) teardowns() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.closes
-}
-
-func (f *rejectingDiscord) acceptedCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.accepted
-}
-
-// accept lets the next activity through, and refuse turns Discord against the
-// payload again, so one test can put an accepted activity between two
-// rejections.
-func (f *rejectingDiscord) accept() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.accepting = true
-}
-
-func (f *rejectingDiscord) refuse() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.accepting = false
-}
-
-// recoveringDiscord is a Discord a test can take away and give back. It models
-// the state the other fake cannot: a socket that was open and then died, which
-// is what a Discord restart leaves behind and what Connected is asked about.
-// Reachability and the open socket are separate, because that gap is the whole
-// failure — the socket is still there and Discord is not.
-type recoveringDiscord struct {
-	mu        sync.Mutex
-	reachable bool
-	connected bool
-	connects  int
-	published int
-}
-
-func (r *recoveringDiscord) Connected() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.connected
-}
-
-func (r *recoveringDiscord) Connect(context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.connects++
-	if !r.reachable {
-		return errors.New("Discord IPC unavailable: no Discord IPC socket candidates")
-	}
-	r.connected = true
-	return nil
-}
-
-func (r *recoveringDiscord) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.connected = false
-	return nil
-}
-
-func (r *recoveringDiscord) SetActivity(*presence.Activity) error {
-	if err := r.request(); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.published++
-	return nil
-}
-
-func (r *recoveringDiscord) ClearActivity() error { return r.request() }
-
-// request is what sending over a socket Discord has taken away does: it fails
-// the way the kernel reports a closed peer, and it is the connection that goes
-// with the peer rather than only the one request.
-func (r *recoveringDiscord) request() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.reachable {
-		r.connected = false
-		return errors.New("write unix /run/user/1000/discord-ipc-0: broken pipe")
-	}
-	return nil
-}
-
-func (r *recoveringDiscord) setReachable(reachable bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.reachable = reachable
-}
-
-func (r *recoveringDiscord) connectAttempts() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.connects
-}
-
-func (r *recoveringDiscord) publishedCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.published
-}
-
-// waitFor polls until the condition holds. The daemon publishes from its own
-// goroutine, so every observation of it has to wait rather than assert.
-func waitFor(t *testing.T, what string, condition func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
 
 type noArtwork struct{}
 
@@ -467,10 +129,9 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, "1.4.0", release)
 
-	logs := &syncBuffer{}
-	logger := diag.New(logs, "daemon")
+	logs, logger := captureLog()
 
-	client := &fakeDiscord{}
+	client := newFakeDiscord()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
@@ -478,10 +139,9 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	}()
 
 	expected := "discord-rpc " + version.Explain(version.PluginBehind, "1.4.0", version.Number)
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(logs.String(), expected) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitFor(t, "the version mismatch to be reported", func() bool {
+		return strings.Contains(logs.String(), expected)
+	})
 	output := logs.String()
 	if !strings.Contains(output, "subscribed to Cliamp playback events") {
 		t.Fatalf("daemon never subscribed:\n%s", output)
@@ -492,7 +152,7 @@ func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
 	if count := strings.Count(output, expected); count != 1 {
 		t.Fatalf("warning logged %d times, want 1:\n%s", count, output)
 	}
-	if client.published() == 0 {
+	if client.activityCount() == 0 {
 		t.Fatal("daemon stopped publishing after the mismatch")
 	}
 }
@@ -832,7 +492,7 @@ func (s *stagedArtwork) Resolve(ctx context.Context, _ artwork.Request, report f
 // loop's lines: a test that asserts on them calls startDaemonWith itself.
 func startDaemon(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration) *fakeDiscord {
 	t.Helper()
-	client := &fakeDiscord{}
+	client := newFakeDiscord()
 	startDaemonWith(t, socket, resolver, refresh, client, diag.Discard())
 	return client
 }
@@ -919,7 +579,7 @@ func TestRunClearsPresenceWhileALookupIsInFlight(t *testing.T) {
 	artwork.awaitLookup(t)
 
 	session.publish(t, stoppedSnapshot("First"))
-	waitFor(t, "the presence to clear", func() bool { return client.cleared() > 0 })
+	waitFor(t, "the presence to clear", func() bool { return client.clearCount() > 0 })
 }
 
 // The loop publishes as soon as it knows the track, then again when the artwork
@@ -1190,30 +850,25 @@ func TestRunReportsAnUnreachableDiscordOncePerOutage(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
-	logs := &syncBuffer{}
-	logger := diag.New(logs, "daemon")
+	logs, logger := captureLog()
 
-	client := &refusingDiscord{}
+	client := newFakeDiscord().refuseConnect(errDiscordUnreachable)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
 		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, 20*time.Millisecond)
 	}()
 
-	deadline := time.Now().Add(6 * time.Second)
-	for time.Now().Before(deadline) && client.attempts() < 3 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if client.attempts() < 3 {
-		t.Fatalf("daemon made %d connect attempts, want at least 3", client.attempts())
-	}
+	waitFor(t, "the daemon to attempt Discord three times", func() bool {
+		return client.connectAttempts() >= 3
+	})
 
 	output := logs.String()
 	if !strings.Contains(output, "connect to Discord: "+errDiscordUnreachable.Error()) {
 		t.Fatalf("an unreachable Discord produced no report:\n%s", output)
 	}
 	if count := strings.Count(output, "connect to Discord:"); count != 1 {
-		t.Fatalf("outage reported %d times across %d attempts, want 1:\n%s", count, client.attempts(), output)
+		t.Fatalf("outage reported %d times across %d attempts, want 1:\n%s", count, client.connectAttempts(), output)
 	}
 }
 
@@ -1228,10 +883,9 @@ func TestRunReportsANewOutageAfterDiscordReturns(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
-	logs := &syncBuffer{}
-	logger := diag.New(logs, "daemon")
+	logs, logger := captureLog()
 
-	client := &refusingDiscord{}
+	client := newFakeDiscord().refuseConnect(errDiscordUnreachable)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
@@ -1242,12 +896,12 @@ func TestRunReportsANewOutageAfterDiscordReturns(t *testing.T) {
 		return strings.Count(logs.String(), "connect to Discord:") == 1
 	})
 
-	client.returns()
+	client.comesBack()
 	waitFor(t, "the daemon to publish once Discord returned", func() bool {
 		return client.activityCount() > 0
 	})
 
-	client.leaves()
+	client.goesAway()
 	waitFor(t, "the second outage to be reported", func() bool {
 		return strings.Count(logs.String(), "connect to Discord:") >= 2
 	})
@@ -1265,17 +919,17 @@ func TestRunLeavesTheConnectionOpenWhenDiscordRejectsAnActivity(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
-	client := &rejectingDiscord{up: true}
+	client := newFakeDiscord().rejectActivity(errActivityRejected)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
 		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, 20*time.Millisecond)
 	}()
 
-	waitFor(t, "three rejected activities", func() bool { return client.attempts() >= 3 })
+	waitFor(t, "three rejected activities", func() bool { return client.activityCount() >= 3 })
 	if teardowns := client.teardowns(); teardowns != 0 {
 		t.Fatalf("daemon tore the connection down %d times over %d rejections; a refused payload leaves the socket good",
-			teardowns, client.attempts())
+			teardowns, client.activityCount())
 	}
 }
 
@@ -1290,17 +944,16 @@ func TestRunReportsARejectedActivityOnce(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
-	logs := &syncBuffer{}
-	logger := diag.New(logs, "daemon")
+	logs, logger := captureLog()
 
-	client := &rejectingDiscord{up: true}
+	client := newFakeDiscord().rejectActivity(errActivityRejected)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
 		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, 20*time.Millisecond)
 	}()
 
-	waitFor(t, "three rejected activities", func() bool { return client.attempts() >= 3 })
+	waitFor(t, "three rejected activities", func() bool { return client.activityCount() >= 3 })
 
 	output := logs.String()
 	if !strings.Contains(output, errActivityRejected.Error()) {
@@ -1308,7 +961,7 @@ func TestRunReportsARejectedActivityOnce(t *testing.T) {
 	}
 	if count := strings.Count(output, "update Discord presence:"); count != 1 {
 		t.Fatalf("rejection reported %d times across %d attempts, want 1:\n%s",
-			count, client.attempts(), output)
+			count, client.activityCount(), output)
 	}
 }
 
@@ -1323,10 +976,9 @@ func TestRunReportsANewRejectionAfterAnAcceptedActivity(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
-	logs := &syncBuffer{}
-	logger := diag.New(logs, "daemon")
+	logs, logger := captureLog()
 
-	client := &rejectingDiscord{up: true}
+	client := newFakeDiscord().rejectActivity(errActivityRejected)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
@@ -1336,9 +988,9 @@ func TestRunReportsANewRejectionAfterAnAcceptedActivity(t *testing.T) {
 	waitFor(t, "the first rejection", func() bool {
 		return strings.Count(logs.String(), "update Discord presence:") >= 1
 	})
-	client.accept()
+	client.acceptsActivity()
 	waitFor(t, "an accepted activity", func() bool { return client.acceptedCount() > 0 })
-	client.refuse()
+	client.rejectsActivity()
 	waitFor(t, "the second rejection to be reported", func() bool {
 		return strings.Count(logs.String(), "update Discord presence:") == 2
 	})
@@ -1358,7 +1010,7 @@ func TestRunRetriesARejectedActivityOnTheRefresh(t *testing.T) {
 	serveCliampEvent(t, socket, version.Number, release)
 
 	const refresh = 200 * time.Millisecond
-	client := &rejectingDiscord{up: true}
+	client := newFakeDiscord().rejectActivity(errActivityRejected)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	started := time.Now()
@@ -1366,13 +1018,9 @@ func TestRunRetriesARejectedActivityOnTheRefresh(t *testing.T) {
 		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, refresh)
 	}()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && client.attempts() < 3 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if client.attempts() < 3 {
-		t.Fatalf("daemon made %d activity attempts, want at least 3", client.attempts())
-	}
+	waitFor(t, "the daemon to attempt three activities", func() bool {
+		return client.activityCount() >= 3
+	})
 	if elapsed := time.Since(started); elapsed > 700*time.Millisecond {
 		t.Fatalf("third activity attempt took %v with a %v refresh; a rejected activity is being retried on a delay of its own",
 			elapsed, refresh)
@@ -1390,10 +1038,9 @@ func TestRunKeepsTheConnectionWhenDiscordRefusesToClear(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampStatus(t, socket, version.Number, "stopped", release)
 
-	logs := &syncBuffer{}
-	logger := diag.New(logs, "daemon")
+	logs, logger := captureLog()
 
-	client := &rejectingDiscord{up: true}
+	client := newFakeDiscord().rejectActivity(errActivityRejected)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
@@ -1419,8 +1066,8 @@ func TestRunClosesTheConnectionWhenClearingFailsForAnotherReason(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	serveCliampStatus(t, socket, version.Number, "stopped", release)
 
-	client := &rejectingDiscord{up: true}
-	client.clearFailsWith(errDiscordWrite)
+	client := newFakeDiscord().rejectActivity(errActivityRejected)
+	client.failsClearWith(errDiscordWrite)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
@@ -1440,7 +1087,7 @@ func TestRunClosesTheConnectionWhenClearingFailsForAnotherReason(t *testing.T) {
 func TestRunReconnectsAfterADisconnectionWhilePaused(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	session := serveCliampSession(t, socket)
-	client := &recoveringDiscord{reachable: true}
+	client := newFakeDiscord()
 	startDaemonWith(t, socket, noArtwork{}, 20*time.Millisecond, client, diag.Discard())
 
 	session.publish(t, playingSnapshot("Track"))
@@ -1448,14 +1095,14 @@ func TestRunReconnectsAfterADisconnectionWhilePaused(t *testing.T) {
 		return client.connectAttempts() > 0
 	})
 
-	client.setReachable(false)
+	client.losesSocket()
 	session.publish(t, stoppedSnapshot("Track"))
 	waitFor(t, "the daemon to notice Discord took the socket away", func() bool {
 		return !client.Connected()
 	})
 
 	attempts := client.connectAttempts()
-	client.setReachable(true)
+	client.comesBack()
 	waitFor(t, "the daemon to try Discord again on its own", func() bool {
 		return client.connectAttempts() > attempts
 	})
@@ -1473,19 +1120,18 @@ func TestRunReportsAnOutageFoundWhileQuiet(t *testing.T) {
 	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	session := serveCliampSession(t, socket)
-	client := &recoveringDiscord{reachable: true}
+	client := newFakeDiscord()
 
-	logs := &syncBuffer{}
-	logger := diag.New(logs, "daemon")
+	logs, logger := captureLog()
 
 	startDaemonWith(t, socket, noArtwork{}, 5*time.Second, client, logger)
 
 	session.publish(t, playingSnapshot("Track"))
 	waitFor(t, "the playing card to reach Discord", func() bool {
-		return client.publishedCount() > 0
+		return client.activityCount() > 0
 	})
 
-	client.setReachable(false)
+	client.losesSocket()
 	session.publish(t, stoppedSnapshot("Track"))
 	waitFor(t, "the quiet path to dial again", func() bool {
 		return client.connectAttempts() > 1

@@ -18,48 +18,6 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
-// recordingDiscord also records cleared activities. The plain fake cannot tell
-// a daemon that cleared its presence from one that simply published nothing
-// more, and clearing is the whole point of the file transport noticing that
-// Cliamp is gone.
-type recordingDiscord struct {
-	fakeDiscord
-	clears int
-}
-
-func (f *recordingDiscord) ClearActivity() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.clears++
-	return nil
-}
-
-func (f *recordingDiscord) cleared() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.clears
-}
-
-// waitFor polls until a matching activity has been published, failing rather
-// than hanging.
-func (f *fakeDiscord) waitFor(t *testing.T, within time.Duration, match func(presence.Activity) bool) presence.Activity {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		f.mu.Lock()
-		for _, activity := range f.activities {
-			if match(activity) {
-				f.mu.Unlock()
-				return activity
-			}
-		}
-		f.mu.Unlock()
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("no activity matching the test's condition within %v", within)
-	return presence.Activity{}
-}
-
 // writeStateDocument writes a state document in the shape the plugin's file
 // mode writes, filling in the fields the test does not vary.
 func writeStateDocument(t *testing.T, path string, fields map[string]any) {
@@ -111,14 +69,14 @@ func TestRunPublishesWhatTheStateFileSays(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	writeStateDocument(t, path, map[string]any{"title": "From the file", "artist": "The artist"})
 
-	client := &fakeDiscord{}
+	client := newFakeDiscord()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
 		_ = run(ctx, fileConfig(path), client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, presenceRefresh)
 	}()
 
-	activity := client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
+	activity := client.waitForActivity(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "From the file"
 	})
 	if activity.State != "The artist" {
@@ -133,27 +91,23 @@ func TestRunClearsPresenceWhenTheDocumentIsRemoved(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rpc-state.json")
 	writeStateDocument(t, path, map[string]any{"title": "From the file"})
 
-	client := &recordingDiscord{}
+	client := newFakeDiscord()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
 		_ = run(ctx, fileConfig(path), client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, presenceRefresh)
 	}()
 
-	client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
+	client.waitForActivity(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "From the file"
 	})
 
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && client.cleared() == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if client.cleared() == 0 {
-		t.Fatal("the daemon left the removed document's track on Discord")
-	}
+	waitFor(t, "the daemon to clear the removed document's track", func() bool {
+		return client.clearCount() > 0
+	})
 }
 
 // A heartbeat-only rewrite carries the position the plugin last reported, so
@@ -177,21 +131,21 @@ func TestRunIgnoresAHeartbeatOnlyRewrite(t *testing.T) {
 	}
 	writeStateDocument(t, path, document(time.Now().Add(-15*time.Second).Unix()))
 
-	client := &fakeDiscord{}
+	client := newFakeDiscord()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
 		_ = run(ctx, fileConfig(path), client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, presenceRefresh)
 	}()
 
-	client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
+	client.waitForActivity(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "Long track"
 	})
 
 	writeStateDocument(t, path, document(time.Now().Unix()))
 	time.Sleep(300 * time.Millisecond)
 
-	if published := client.published(); published != 1 {
+	if published := client.activityCount(); published != 1 {
 		t.Fatalf("the daemon published %d activities for one track, want 1", published)
 	}
 }
