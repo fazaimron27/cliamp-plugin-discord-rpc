@@ -287,9 +287,9 @@ func TestSubscribeIgnoresADocumentThatAlreadyAgedOut(t *testing.T) {
 // tests cannot pin down: a heartbeat exactly one window old is not evidence that
 // Cliamp is running, so a document at that age is not delivered as playing,
 // while one a nanosecond inside the window still is.
-func TestSnapshotLapsesWithItsHeartbeat(t *testing.T) {
+func TestReadingLapsesWithItsHeartbeat(t *testing.T) {
 	beat := time.Unix(1000, 0)
-	current := snapshot{heartbeat: beat}
+	current := reading{heartbeat: beat}
 	maxAge := 45 * time.Second
 
 	tests := []struct {

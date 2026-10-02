@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
@@ -109,6 +110,41 @@ func TestPresenceTruncationPreservesUTF8(t *testing.T) {
 	}
 	if len([]rune(activity.Details)) != 48 || len([]rune(activity.State)) != 40 {
 		t.Fatalf("details/state lengths = %d/%d", len([]rune(activity.Details)), len([]rune(activity.State)))
+	}
+}
+
+// large_text is capped in bytes, and the cut has to land on a rune boundary:
+// bytes that break a character mid-sequence are not text Discord will accept,
+// so the field would be refused for being malformed rather than long.
+//
+// Nothing pinned that walk before. Every other album in this file is short
+// enough to skip the cap entirely, which left the branch that does the walking
+// unexercised — and it is the branch the byte cap exists for.
+//
+// Sixty three-byte characters is 180 bytes against a 128-byte cap, which puts
+// the byte limit in the middle of a character and forces the walk back. A cap
+// counted in runes would have kept all sixty, so the byte length is also what
+// says which of the two caps this field is under.
+func TestPresenceCapsAlbumTextOnARuneBoundary(t *testing.T) {
+	album := strings.Repeat("界", 60)
+	state := playback.State{Status: "playing", Title: "Track", Artist: "Artist", Album: album}
+	activity := presence.Build(state, presence.Options{}, "https://example.test/art.png", presence.Links{}, time.Now())
+
+	if activity.Assets == nil {
+		t.Fatal("no assets were built; the artwork URL should still be published")
+	}
+	got := activity.Assets.LargeText
+	if !utf8.ValidString(got) {
+		t.Fatalf("large_text is not valid UTF-8: %q", got)
+	}
+	if len(got) > 128 {
+		t.Fatalf("large_text is %d bytes; Discord's cap is 128", len(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("large_text = %q; want it truncated", got)
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("large_text = %q; the cut landed inside a character", got)
 	}
 }
 

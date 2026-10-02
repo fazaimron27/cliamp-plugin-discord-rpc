@@ -81,10 +81,17 @@ type document struct {
 	Heartbeat int64 `json:"heartbeat"`
 }
 
-// snapshot is a document that has been read and checked, with its two jobs kept
-// apart: the state that describes what to show, and the heartbeat that says the
-// writer is still running.
-type snapshot struct {
+// reading is what a document becomes once it has been read and checked, with its
+// two jobs kept apart: the state that describes what to show, and the heartbeat
+// that says the writer is still running.
+//
+// It is a reading rather than a snapshot because this daemon already spends that
+// word elsewhere. A snapshot is the playback state itself — the thing the plugin
+// publishes, the thing cliamp.Answer carries, the thing the daemon puts on the
+// card — and a type here sharing the name made the file transport look like it
+// held the same object as the other two when it holds a checked reading of a
+// document that describes one.
+type reading struct {
 	state     playback.State
 	heartbeat time.Time
 }
@@ -98,23 +105,23 @@ type snapshot struct {
 // The heartbeat carries whole seconds, as the format does, so a lapsed window
 // is not finer than that: what this measures against is the moment the plugin
 // last wrote, to the second.
-func (s snapshot) lapseIn(now time.Time, maxAge time.Duration) time.Duration {
-	return s.heartbeat.Add(maxAge).Sub(now)
+func (r reading) lapseIn(now time.Time, maxAge time.Duration) time.Duration {
+	return r.heartbeat.Add(maxAge).Sub(now)
 }
 
 // liveAt reports whether the document is recent enough at the given moment to
 // be believed at all. A heartbeat exactly one window old is not: by then the
 // plugin has missed the beats the window was sized to tolerate.
-func (s snapshot) liveAt(now time.Time, maxAge time.Duration) bool {
-	return s.lapseIn(now, maxAge) > 0
+func (r reading) liveAt(now time.Time, maxAge time.Duration) bool {
+	return r.lapseIn(now, maxAge) > 0
 }
 
 // read loads the document at path, reporting the error os.ReadFile would if it
 // is not there.
-func read(path string) (snapshot, error) {
+func read(path string) (reading, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return snapshot{}, err
+		return reading{}, err
 	}
 	return decode(data)
 }
@@ -125,13 +132,13 @@ func read(path string) (snapshot, error) {
 // The shared snapshot rules apply here as much as on the IPC side: what the file
 // carries is still a snapshot of the same player, and the daemon is not supposed
 // to have to know which transport it arrived by.
-func decode(data []byte) (snapshot, error) {
+func decode(data []byte) (reading, error) {
 	var parsed document
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return snapshot{}, fmt.Errorf("state document is not readable: %w", err)
+		return reading{}, fmt.Errorf("state document is not readable: %w", err)
 	}
 	if parsed.Schema != SchemaVersion {
-		return snapshot{}, fmt.Errorf(
+		return reading{}, fmt.Errorf(
 			"state document schema %d is not the schema %d this daemon reads",
 			parsed.Schema, SchemaVersion,
 		)
@@ -150,15 +157,15 @@ func decode(data []byte) (snapshot, error) {
 		ObservedAt:    parsed.UpdatedAt,
 	}
 	if err := state.Validate(); err != nil {
-		return snapshot{}, err
+		return reading{}, err
 	}
 	if parsed.UpdatedAt <= 0 {
-		return snapshot{}, errors.New("state document has no updated_at time")
+		return reading{}, errors.New("state document has no updated_at time")
 	}
 	if parsed.Heartbeat <= 0 {
-		return snapshot{}, errors.New("state document has no heartbeat")
+		return reading{}, errors.New("state document has no heartbeat")
 	}
-	return snapshot{state: state, heartbeat: time.Unix(parsed.Heartbeat, 0)}, nil
+	return reading{state: state, heartbeat: time.Unix(parsed.Heartbeat, 0)}, nil
 }
 
 // Detail is what can be said about the state document as it stands, for a
@@ -283,7 +290,7 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 		}
 	}
 
-	armDeadline := func(current snapshot) {
+	armDeadline := func(current reading) {
 		deadline.Reset(current.lapseIn(time.Now(), maxAge))
 	}
 
@@ -296,7 +303,7 @@ func watch(ctx context.Context, watcher *fsnotify.Watcher, path string, maxAge t
 		return deliver(playback.State{Status: "stopped", ObservedAt: time.Now().Unix()})
 	}
 
-	live := func(current snapshot) bool {
+	live := func(current reading) bool {
 		return current.liveAt(time.Now(), maxAge)
 	}
 

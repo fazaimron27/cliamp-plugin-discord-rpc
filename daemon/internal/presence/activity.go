@@ -245,13 +245,13 @@ func Build(s playback.State, options Options, artworkURL string, links Links, no
 	}
 
 	if artworkURL != "" {
-		activity.Assets = &Assets{LargeImage: artworkURL, LargeText: truncate(s.Album, maxFieldBytes), LargeURL: track}
+		activity.Assets = &Assets{LargeImage: artworkURL, LargeText: truncateBytes(s.Album, maxFieldBytes), LargeURL: track}
 	} else if options.LargeImage != "" || s.Album != "" {
 		text := options.LargeText
 		if s.Album != "" {
 			text = s.Album
 		}
-		activity.Assets = &Assets{LargeImage: options.LargeImage, LargeText: truncate(text, maxFieldBytes), LargeURL: track}
+		activity.Assets = &Assets{LargeImage: options.LargeImage, LargeText: truncateBytes(text, maxFieldBytes), LargeURL: track}
 	}
 
 	if s.Status == "playing" && s.Duration > 0 {
@@ -279,9 +279,20 @@ func truncateRunes(value string, maxRunes int) string {
 	return string(runes[:maxRunes-3]) + "..."
 }
 
-// truncate caps a text field at maxBytes on a rune boundary, keeping anything
-// already shorter. A value below Discord's floor is dropped outright.
-func truncate(value string, maxBytes int) string {
+// truncateBytes caps a text field at maxBytes on a rune boundary, keeping
+// anything already shorter. A value below Discord's floor is dropped outright.
+//
+// The cap is in bytes because Discord's is: assets.large_text is limited by the
+// size of the field on the wire, not by how many characters it draws, so a
+// value built from multi-byte characters gives up characters to fit. Walking
+// back to a rune boundary is what keeps the result decodable — a cut at an
+// arbitrary byte offset can land inside a character, and the payload would then
+// be refused for being malformed rather than simply long.
+//
+// Neither name in this pair is the default. truncateRunes caps the fields
+// Discord limits by character count, and which cap a field falls under is a
+// property of the field, so the caller has to know which one it needs.
+func truncateBytes(value string, maxBytes int) string {
 	value = strings.TrimSpace(value)
 	if utf8.RuneCountInString(value) < minFieldRunes {
 		return ""
