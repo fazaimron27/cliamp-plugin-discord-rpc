@@ -48,6 +48,38 @@ func TestVersionRelateComparesReleaseLines(t *testing.T) {
 	}
 }
 
+// A plugin reports its version in whatever spelling it was built with, and both
+// the comparison here and the daemon's log lines and release URLs are written
+// from one rendering of it. These are the spellings that collapse to one value.
+//
+// Only a leading "v" is dropped: the daemon puts this value back in front of
+// itself when it renders a tag, so a "v" left anywhere else in the string would
+// become a second one.
+func TestVersionNormalizesEverySpellingOfOneRelease(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"bare", "1.8.0", "1.8.0"},
+		{"v prefixed", "v1.8.0", "1.8.0"},
+		{"surrounding space", " 1.8.0 ", "1.8.0"},
+		{"space and v", "  v1.8.0\t", "1.8.0"},
+		{"empty", "", ""},
+		{"whitespace only", "   ", ""},
+		{"v alone", "v", ""},
+		{"v not leading", "1.8.0v", "1.8.0v"},
+		{"inner space", "1.8.0 beta", "1.8.0 beta"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := version.Normalize(test.value); got != test.want {
+				t.Fatalf("Normalize(%q) = %q, want %q", test.value, got, test.want)
+			}
+		})
+	}
+}
+
 // The daemon's warning and the --check report describe one relation to the same
 // reader, so they share one sentence. These are the sentences; both consumers
 // are asserted to carry them verbatim.

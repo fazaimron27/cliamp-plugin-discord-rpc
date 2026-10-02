@@ -8,7 +8,6 @@ package daemon
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
@@ -21,8 +20,12 @@ const (
 // normalize trims a plugin-reported version and drops any leading "v". The value
 // arrives from the plugin, so it may carry the prefix, surrounding space, or
 // neither, and it is rendered into log lines as well as URLs.
+//
+// The rule lives in the version package because the release-line comparison
+// applies it too, and both sides must agree on the spelling: a tag rendered from
+// one spelling and compared under another would describe two releases.
 func normalize(value string) string {
-	return strings.TrimPrefix(strings.TrimSpace(value), "v")
+	return version.Normalize(value)
 }
 
 // tag renders a reported version as a release tag, carrying exactly one leading

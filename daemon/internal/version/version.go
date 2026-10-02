@@ -106,10 +106,27 @@ func Explain(relation Relation, plugin, daemon string) string {
 	}
 }
 
+// Normalize trims a reported version and drops one leading "v", giving the
+// spelling every consumer of a release line writes from.
+//
+// The value arrives from the plugin, so it may carry the prefix, surrounding
+// space, or neither, and the same release reaches this daemon as several
+// strings. Comparison tolerates that by parsing, but the daemon also renders
+// the value into log lines and release URLs, where two spellings of one release
+// are two different strings — and a tag rendered from an un-normalized value
+// would carry "vv". Normalizing first is what makes one release one value.
+//
+// Only a leading "v" is dropped. A "v" anywhere else is left where it is: it is
+// not the prefix this exists to remove, and removing it would hide a value the
+// plugin did not send.
+func Normalize(value string) string {
+	return strings.TrimPrefix(strings.TrimSpace(value), "v")
+}
+
 // releaseLine parses a dotted version into its major and minor components,
 // reporting false when the value does not start with two numeric components.
 func releaseLine(value string) (int, int, bool) {
-	fields := strings.Split(strings.TrimPrefix(strings.TrimSpace(value), "v"), ".")
+	fields := strings.Split(Normalize(value), ".")
 	if len(fields) < 2 {
 		return 0, 0, false
 	}
