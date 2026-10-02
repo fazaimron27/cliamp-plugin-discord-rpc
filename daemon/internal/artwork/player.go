@@ -11,10 +11,10 @@ package artwork
 
 import (
 	"context"
-	"net/url"
 	"strings"
 
 	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/tracklink"
 )
 
 // artHosts is the allowlist of hosts whose artwork this daemon will publish.
@@ -64,9 +64,9 @@ func (p *Player) Resolve(ctx context.Context, request Request) (TrackInfo, error
 	return TrackInfo{Image: image}, nil
 }
 
-// artworkURL returns raw only when it is an HTTPS URL, carries no userinfo, and
-// names a host on the allowlist. Everything the player reports goes through it,
-// so the image is held to one rule.
+// artworkURL returns raw only when it is a URL this daemon may publish and it
+// names a host on the allowlist. Everything the player reports goes through
+// it, so the image is held to one rule.
 //
 // The host test is exact equality after folding case, and nothing is trimmed.
 // A suffix test would accept i.scdn.co.evil.example, and dropping a leading
@@ -74,8 +74,8 @@ func (p *Player) Resolve(ctx context.Context, request Request) (TrackInfo, error
 // hosts a person may spell by hand — would accept m.i.scdn.co as i.scdn.co.
 func artworkURL(raw string) string {
 	raw = strings.TrimSpace(raw)
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+	parsed, ok := tracklink.PublishableHTTPS(raw)
+	if !ok {
 		return ""
 	}
 	if !artHosts[strings.ToLower(parsed.Hostname())] {

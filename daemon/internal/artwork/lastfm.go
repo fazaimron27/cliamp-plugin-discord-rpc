@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/tracklink"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -197,16 +198,20 @@ func (r *LastFM) Resolve(ctx context.Context, artist, title string) (TrackInfo, 
 	return info, nil
 }
 
-// lastFMURL returns raw only when it is an HTTPS URL with a host, and an empty
-// string for anything else. Every URL in a response goes through this, so the
-// three fields are held to one rule.
+// lastFMURL returns raw only when it is a URL this daemon may publish and it
+// names a host, and an empty string for anything else. Every URL in a response
+// goes through this, so the three fields are held to one rule.
 //
 // Discord rejects the entire activity when a single field is a malformed URL,
 // which would cost the card its artwork as well as the link. A value we cannot
 // vouch for is therefore dropped here, where dropping it costs nothing.
+//
+// The host requirement is this site's own: a Last.fm payload is the one place
+// a URL is republished with nothing else checking it, so "https:///x" has to
+// be refused here rather than by an allowlist downstream.
 func lastFMURL(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	parsed, ok := tracklink.PublishableHTTPS(raw)
+	if !ok || parsed.Host == "" {
 		return ""
 	}
 	return raw

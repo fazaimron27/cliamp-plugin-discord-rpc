@@ -41,6 +41,7 @@ var refusedPaths = []struct {
 	{"netease path is not the song route", "https://music.163.com/album?id=12345"},
 	{"netease over http is refused", "http://music.163.com/song?id=12345"},
 	{"netease lookalike host", "https://music.163.com.evil.example/song?id=12345"},
+	{"netease with a credential in the authority", "https://user:secret@music.163.com/#/song?id=12345"},
 	{"soundcloud profile tab is not a track", "https://soundcloud.com/artist/tracks"},
 	{"soundcloud set is not a track", "https://soundcloud.com/artist/sets/summer"},
 	{"soundcloud stations namespace is refused", "https://soundcloud.com/stations/track"},
@@ -69,6 +70,7 @@ var refusedPaths = []struct {
 	{"youtube with no video id", "https://www.youtube.com/watch"},
 	{"youtube with a truncated video id", "https://www.youtube.com/watch?v=short"},
 	{"youtube with a video id outside the charset", "https://www.youtube.com/watch?v=dQw4w9WgXc."},
+	{"youtube with a credential in the authority", "https://user:secret@www.youtube.com/watch?v=dQw4w9WgXcQ"},
 	{"youtube music over http is refused", "http://music.youtube.com/watch?v=dQw4w9WgXcQ"},
 }
 
