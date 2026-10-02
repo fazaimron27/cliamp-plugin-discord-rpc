@@ -152,11 +152,14 @@ cliamp-plugin-discord-rpc/
 │       ├── cliamp/
 │       ├── config/
 │       ├── daemon/
+│       ├── diag/
 │       ├── discord/
 │       ├── playback/
 │       ├── presence/
 │       ├── statewatch/
-│       └── tracklink/
+│       ├── style/
+│       ├── tracklink/
+│       └── version/
 ├── docs/
 ├── discord-rpc.lua
 ├── install.sh
@@ -168,6 +171,11 @@ cliamp-plugin-discord-rpc/
 ## Go Packages
 
 - `daemon/cmd/cliamp-rpcd` handles startup and operating-system signals.
+- `daemon/internal/diag` is the logging seam. Each component's lines reach it
+  tagged with the name of the component that wrote them, and the writer `main`
+  chose is the only place that decides how those lines are shaped or where they
+  go. That is what lets a test hold a component's output without swapping the
+  process-wide log writer and racing every other test in the binary.
 - `daemon/internal/config` loads flags, environment overrides, and
   `[plugins.discord-rpc]` from Cliamp's TOML config. The transport is the one
   setting that belongs to both halves at once, so this package records where its
@@ -175,6 +183,11 @@ cliamp-plugin-discord-rpc/
   reading a different one. `--transport` and `CLIAMP_DISCORD_TRANSPORT` are the
   two overrides that can do it; they exist for troubleshooting rather than
   configuration, and a daemon running under one warns at startup.
+- `daemon/internal/version` holds the daemon's release identity: the version
+  constant the Lua manifest, the release tag and the bundled installer all
+  restate, plus the comparison that words a mismatched plugin/daemon pairing for
+  the daemon's startup warning and for `--check`. The release-identity section
+  above describes that pairing and which half each reader reports on.
 - `daemon/internal/cliamp` subscribes to retained and live plugin events over
   Cliamp's owner-only Unix socket. It also issues one `state.get` request per
   track over a short-lived connection of its own, for the artwork Cliamp holds
@@ -198,6 +211,10 @@ cliamp-plugin-discord-rpc/
   reconnects, refreshes, and activity clearing. It also owns the `--check`
   diagnostic, which probes the same transports in isolation and reports them
   without starting the run loop.
+- `daemon/internal/style` holds this repository's comment convention, the one
+  written for contributors in `docs/comments.md`. It has no API on purpose: a
+  convention belongs to no single package, so this one exists to give the guard
+  beside it a home and to state the rule where a Go reader meets it.
 
 ## Playback Behavior
 
