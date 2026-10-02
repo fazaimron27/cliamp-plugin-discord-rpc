@@ -7,6 +7,13 @@ package main
 // and the process then either answers and exits (--version, --check) or runs
 // until it is interrupted, clearing the activity on its way out.
 //
+// It is also the one place that decides where a running daemon's log lines go.
+// The two log.Fatal calls below stay on the standard library's logger, because
+// neither is a component's line: the first reports a configuration that would
+// not parse, read before there is a daemon to attribute anything to, and the
+// second reports a Run that has already returned, which leaves the process
+// itself as the only thing to name.
+//
 // The explicit stop() before os.Exit in the --check path is load-bearing.
 // os.Exit skips deferred calls, so the deferred stop() never runs on that path,
 // and deleting the explicit one because the defer looks like it covers the case
@@ -48,7 +55,7 @@ func main() {
 		os.Exit(code)
 	}
 
-	if err := daemon.Run(ctx, cfg); err != nil {
+	if err := daemon.Run(ctx, cfg, os.Stderr); err != nil {
 		log.Fatal(err)
 	}
 }

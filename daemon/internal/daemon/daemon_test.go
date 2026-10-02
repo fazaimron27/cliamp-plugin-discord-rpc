@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net"
 	"path/filepath"
 	"strings"
@@ -24,6 +23,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
 	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
@@ -461,21 +461,20 @@ func serveCliampStatus(t *testing.T, socket, pluginVersion, status string, relea
 // asserted as the sentence version.Explain words, because the run loop and the
 // --check report share one wording rather than each wording it privately.
 func TestRunWarnsAndKeepsPublishingOnMismatchedPluginVersion(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, "1.4.0", release)
 
 	logs := &syncBuffer{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(logs, "daemon")
 
 	client := &fakeDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, presenceRefresh)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, presenceRefresh)
 	}()
 
 	expected := "discord-rpc " + version.Explain(version.PluginBehind, "1.4.0", version.Number)
@@ -829,11 +828,12 @@ func (s *stagedArtwork) Resolve(ctx context.Context, _ artwork.Request, report f
 
 // startDaemon runs the loop against a session and a resolver, and returns the
 // Discord fake it publishes to. Production passes presenceRefresh; a test that
-// needs the loop's timer to fire sooner passes its own interval.
+// needs the loop's timer to fire sooner passes its own interval. It discards the
+// loop's lines: a test that asserts on them calls startDaemonWith itself.
 func startDaemon(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration) *fakeDiscord {
 	t.Helper()
 	client := &fakeDiscord{}
-	startDaemonWith(t, socket, resolver, refresh, client)
+	startDaemonWith(t, socket, resolver, refresh, client, diag.Discard())
 	return client
 }
 
@@ -841,12 +841,17 @@ func startDaemon(t *testing.T, socket string, resolver artworkResolver, refresh 
 // test can hold the connection it is handed and take it away again. The default
 // fake is reachable and connected for its whole life, which leaves every failure
 // that arrives over a socket that is still open untestable.
-func startDaemonWith(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration, client discordClient) {
+//
+// The logger is handed to the loop for both of its loggers, since what these
+// tests assert on is the sentence a daemon line carries rather than the
+// component it was attributed to; that attribution is checked where the
+// components are named, in Run.
+func startDaemonWith(t *testing.T, socket string, resolver artworkResolver, refresh time.Duration, client discordClient, logger diag.Logger) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, resolver, time.Now, refresh)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, resolver, logger, logger, time.Now, refresh)
 	}()
 }
 
@@ -1179,21 +1184,20 @@ func TestNewResolverAsksThePlayerOverTheConfiguredSocket(t *testing.T) {
 // explain. The attempt count is checked first, because a report count only means
 // what it says once there were several attempts that could have been reported.
 func TestRunReportsAnUnreachableDiscordOncePerOutage(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
 	logs := &syncBuffer{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(logs, "daemon")
 
 	client := &refusingDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, 20*time.Millisecond)
 	}()
 
 	deadline := time.Now().Add(6 * time.Second)
@@ -1218,21 +1222,20 @@ func TestRunReportsAnUnreachableDiscordOncePerOutage(t *testing.T) {
 // latch that never cleared would fall silent exactly when the daemon started
 // failing again, which is the state the report exists to surface.
 func TestRunReportsANewOutageAfterDiscordReturns(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
 	logs := &syncBuffer{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(logs, "daemon")
 
 	client := &refusingDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, 20*time.Millisecond)
 	}()
 
 	waitFor(t, "the first outage to be reported", func() bool {
@@ -1266,7 +1269,7 @@ func TestRunLeavesTheConnectionOpenWhenDiscordRejectsAnActivity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, 20*time.Millisecond)
 	}()
 
 	waitFor(t, "three rejected activities", func() bool { return client.attempts() >= 3 })
@@ -1281,21 +1284,20 @@ func TestRunLeavesTheConnectionOpenWhenDiscordRejectsAnActivity(t *testing.T) {
 // journal it exists to explain and would do it at the refresh rate for as long
 // as the payload stays refused.
 func TestRunReportsARejectedActivityOnce(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
 	logs := &syncBuffer{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(logs, "daemon")
 
 	client := &rejectingDiscord{up: true}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, 20*time.Millisecond)
 	}()
 
 	waitFor(t, "three rejected activities", func() bool { return client.attempts() >= 3 })
@@ -1315,21 +1317,20 @@ func TestRunReportsARejectedActivityOnce(t *testing.T) {
 // report follows, for the same reason: a latch that never cleared would fall
 // silent precisely when the daemon began refusing activities again.
 func TestRunReportsANewRejectionAfterAnAcceptedActivity(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	serveCliampEvent(t, socket, version.Number, release)
 
 	logs := &syncBuffer{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(logs, "daemon")
 
 	client := &rejectingDiscord{up: true}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, 20*time.Millisecond)
 	}()
 
 	waitFor(t, "the first rejection", func() bool {
@@ -1362,7 +1363,7 @@ func TestRunRetriesARejectedActivityOnTheRefresh(t *testing.T) {
 	t.Cleanup(cancel)
 	started := time.Now()
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, refresh)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, refresh)
 	}()
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -1383,21 +1384,20 @@ func TestRunRetriesARejectedActivityOnTheRefresh(t *testing.T) {
 // clear reports, which makes this the common case rather than a corner: any
 // user whose card will not clear would otherwise pay a teardown for every pause.
 func TestRunKeepsTheConnectionWhenDiscordRefusesToClear(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	serveCliampStatus(t, socket, version.Number, "stopped", release)
 
 	logs := &syncBuffer{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(logs, "daemon")
 
 	client := &rejectingDiscord{up: true}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, logger, logger, time.Now, 20*time.Millisecond)
 	}()
 
 	waitFor(t, "the clear to be attempted", func() bool { return client.clearCount() >= 1 })
@@ -1424,7 +1424,7 @@ func TestRunClosesTheConnectionWhenClearingFailsForAnotherReason(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, time.Now, 20*time.Millisecond)
+		_ = run(ctx, config.Config{CliampSocket: socket}, client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, 20*time.Millisecond)
 	}()
 
 	waitFor(t, "the clear to be attempted", func() bool { return client.clearCount() >= 1 })
@@ -1441,7 +1441,7 @@ func TestRunReconnectsAfterADisconnectionWhilePaused(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	session := serveCliampSession(t, socket)
 	client := &recoveringDiscord{reachable: true}
-	startDaemonWith(t, socket, noArtwork{}, 20*time.Millisecond, client)
+	startDaemonWith(t, socket, noArtwork{}, 20*time.Millisecond, client, diag.Discard())
 
 	session.publish(t, playingSnapshot("Track"))
 	waitFor(t, "the daemon to reach Discord for the playing track", func() bool {
@@ -1470,16 +1470,15 @@ func TestRunReconnectsAfterADisconnectionWhilePaused(t *testing.T) {
 // one the refresh could reach the playing path first and report the same outage
 // from there, and the test would pass without the quiet path reporting at all.
 func TestRunReportsAnOutageFoundWhileQuiet(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	session := serveCliampSession(t, socket)
 	client := &recoveringDiscord{reachable: true}
 
 	logs := &syncBuffer{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(logs, "daemon")
 
-	startDaemonWith(t, socket, noArtwork{}, 5*time.Second, client)
+	startDaemonWith(t, socket, noArtwork{}, 5*time.Second, client, logger)
 
 	session.publish(t, playingSnapshot("Track"))
 	waitFor(t, "the playing card to reach Discord", func() bool {

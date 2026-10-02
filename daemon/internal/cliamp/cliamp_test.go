@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
 	"net"
 	"path/filepath"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 )
 
 // cliampRequest mirrors the v2 envelope Cliamp requires before it will serve a
@@ -72,7 +72,7 @@ func TestCliampSubscriptionReceivesPlayback(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	states, err := cliampipc.Subscribe(ctx, socket)
+	states, err := cliampipc.Subscribe(ctx, socket, diag.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestCliampSubscriptionReportsProtocolError(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := cliampipc.Subscribe(ctx, socket); err == nil {
+	if _, err := cliampipc.Subscribe(ctx, socket, diag.Discard()); err == nil {
 		t.Fatal("expected an error for a rejected subscription")
 	} else if !strings.Contains(err.Error(), "invalid_version") {
 		t.Fatalf("err = %v, want it to name the Cliamp error code", err)
@@ -112,6 +112,7 @@ func TestCliampSubscriptionReportsProtocolError(t *testing.T) {
 // frames in order, so receiving the good one proves the bad one was handled, and
 // the log line for it must already have been written by then.
 func TestCliampSubscriptionReportsDiscardedSnapshot(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(t.TempDir(), "cliamp.sock")
 	serveConn(t, socket, func(conn net.Conn, _ cliampRequest) {
 		_, _ = conn.Write([]byte("{\"version\":2,\"id\":\"discord-rpc-subscribe\",\"ok\":true}\n"))
@@ -120,13 +121,11 @@ func TestCliampSubscriptionReportsDiscardedSnapshot(t *testing.T) {
 	})
 
 	var captured bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&captured)
-	t.Cleanup(func() { log.SetOutput(previous) })
+	logger := diag.New(&captured, "cliamp")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	states, err := cliampipc.Subscribe(ctx, socket)
+	states, err := cliampipc.Subscribe(ctx, socket, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

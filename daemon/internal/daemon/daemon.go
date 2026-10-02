@@ -7,11 +7,12 @@ package daemon
 
 import (
 	"context"
-	"log"
+	"io"
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/tracklink"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
@@ -26,20 +27,34 @@ const presenceRefresh = 15 * time.Second
 //
 // The line it logs at startup names the source it is about to read, which is the
 // first thing to check when nothing shows up on Discord.
-func Run(ctx context.Context, cfg config.Config) error {
+//
+// It takes the writer rather than a Logger because it is where the components
+// are named. Each logger is built here with the name its lines will carry into
+// the journal, so a component is attributed in one place rather than by
+// whichever caller happened to construct it.
+func Run(ctx context.Context, cfg config.Config, w io.Writer) error {
+	logger := diag.New(w, "daemon")
 	switch cfg.Transport {
 	case config.TransportFile:
-		log.Printf("starting cliamp-rpcd %s (state file: %s)", version.Number, cfg.StatePath)
+		logger.Printf("starting cliamp-rpcd %s (state file: %s)", version.Number, cfg.StatePath)
 	default:
-		log.Printf("starting cliamp-rpcd %s (Cliamp IPC: %s)", version.Number, cfg.CliampSocket)
+		logger.Printf("starting cliamp-rpcd %s (Cliamp IPC: %s)", version.Number, cfg.CliampSocket)
 	}
 	if warning := cfg.TransportWarning(); warning != "" {
-		log.Print(warning)
+		logger.Printf("%s", warning)
 	}
 	if cfg.LastFMAPIKey == "" {
-		log.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
+		logger.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
-	return run(ctx, cfg, discord.NewClient(cfg.ApplicationID), newResolver(cfg), time.Now, presenceRefresh)
+	return run(
+		ctx, cfg,
+		discord.NewClient(cfg.ApplicationID, diag.New(w, "discord")),
+		newResolver(cfg),
+		logger,
+		diag.New(w, "cliamp"),
+		time.Now,
+		presenceRefresh,
+	)
 }
 
 // newResolver builds the artwork resolver the daemon runs with. It is a

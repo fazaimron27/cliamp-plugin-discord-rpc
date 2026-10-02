@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 )
@@ -77,7 +78,7 @@ func TestDiscordClientHandshakeAndActivity(t *testing.T) {
 		done <- writeTestFrame(conn, 1, map[string]any{"nonce": request.Nonce})
 	}()
 
-	client := discord.NewClient("123")
+	client := discord.NewClient("123", diag.Discard())
 	if err := client.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestDiscordSetActivityReportsARejection(t *testing.T) {
 		})
 	}()
 
-	client := discord.NewClient("123")
+	client := discord.NewClient("123", diag.Discard())
 	if err := client.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +195,7 @@ func TestDiscordConnectNamesTheSocketThatRefusedIt(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-	client := discord.NewClient("123")
+	client := discord.NewClient("123", diag.Discard())
 	err = client.Connect(context.Background())
 	if err == nil {
 		t.Fatal("Connect() succeeded against a socket that never answered the handshake")

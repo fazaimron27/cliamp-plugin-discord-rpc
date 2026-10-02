@@ -15,12 +15,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
 	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
@@ -90,7 +90,21 @@ import (
 // Last.fm had the artwork. The refresh passes artworkTrack as the identity to
 // match the reply against, not as the artist: it names the track the loop is
 // currently showing.
-func run(ctx context.Context, cfg config.Config, client discordClient, resolver artworkResolver, now func() time.Time, refresh time.Duration) error {
+//
+// Two loggers arrive rather than one: the loop's own lines go through logger,
+// and the Cliamp subscription's discarded-frame lines through cliampLogger, so
+// each reaches the journal already naming the component that produced it. Where
+// either one lands is Run's decision, not the loop's.
+func run(
+	ctx context.Context,
+	cfg config.Config,
+	client discordClient,
+	resolver artworkResolver,
+	logger diag.Logger,
+	cliampLogger diag.Logger,
+	now func() time.Time,
+	refresh time.Duration,
+) error {
 	defer client.Close()
 
 	var states <-chan playback.State
@@ -143,7 +157,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	dialDiscord := func() error {
 		if err := client.Connect(ctx); err != nil {
 			if !discordUnreachableReported {
-				log.Printf("connect to Discord: %v", err)
+				logger.Printf("connect to Discord: %v", err)
 				discordUnreachableReported = true
 			}
 			return err
@@ -156,7 +170,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 		if cfg.Transport == config.TransportFile {
 			return statewatch.Subscribe(ctx, cfg.StatePath, cfg.StateMaxAge)
 		}
-		return cliampipc.Subscribe(ctx, cfg.CliampSocket)
+		return cliampipc.Subscribe(ctx, cfg.CliampSocket, cliampLogger)
 	}
 	subscription := "subscribed to Cliamp playback events"
 	if cfg.Transport == config.TransportFile {
@@ -166,7 +180,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 	clear := func() {
 		if client.Connected() && publishedKey != "clear" {
 			if err := client.ClearActivity(); err != nil {
-				log.Printf("clear Discord presence: %v", err)
+				logger.Printf("clear Discord presence: %v", err)
 				var rejected *discord.RejectionError
 				if !errors.As(err, &rejected) {
 					_ = client.Close()
@@ -217,12 +231,12 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 			var rejected *discord.RejectionError
 			if errors.As(err, &rejected) {
 				if rejections.observe(err) {
-					log.Printf("update Discord presence: %v", err)
+					logger.Printf("update Discord presence: %v", err)
 				}
 				reset(refreshTimer, refresh)
 				return
 			}
-			log.Printf("update Discord presence: %v", err)
+			logger.Printf("update Discord presence: %v", err)
 			_ = client.Close()
 			reset(refreshTimer, time.Second)
 			return
@@ -235,7 +249,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 
 	accept := func(state playback.State) {
 		if warning := watch.observe(state.PluginVersion); warning != "" {
-			log.Print(warning)
+			logger.Printf("%s", warning)
 		}
 		lastState = tracker.Accept(state)
 		haveState = true
@@ -254,14 +268,14 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 					clear()
 					return nil
 				}
-				log.Printf("subscribe to Cliamp events: %v", err)
+				logger.Printf("subscribe to Cliamp events: %v", err)
 				reset(cliampTimer, reconnectDelay)
 				reconnectDelay = min(2*reconnectDelay, 15*time.Second)
 				continue
 			}
 			states = stream
 			reconnectDelay = time.Second
-			log.Print(subscription)
+			logger.Printf("%s", subscription)
 		case state, ok := <-states:
 			if !ok {
 				states = nil
@@ -269,7 +283,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 				clear()
 				reset(cliampTimer, reconnectDelay)
 				reconnectDelay = min(2*reconnectDelay, 15*time.Second)
-				log.Printf("Cliamp event stream disconnected; reconnecting")
+				logger.Printf("Cliamp event stream disconnected; reconnecting")
 				continue
 			}
 			accept(state)
@@ -278,7 +292,7 @@ func run(ctx context.Context, cfg config.Config, client discordClient, resolver 
 				continue
 			}
 			if result.err != nil {
-				log.Printf("resolve Last.fm artwork: %v", result.err)
+				logger.Printf("resolve Last.fm artwork: %v", result.err)
 			}
 			artworkInfo = result.info
 			reconcile()

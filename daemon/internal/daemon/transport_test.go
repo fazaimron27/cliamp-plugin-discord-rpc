@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
@@ -113,7 +114,9 @@ func TestRunPublishesWhatTheStateFileSays(t *testing.T) {
 	client := &fakeDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now, presenceRefresh) }()
+	go func() {
+		_ = run(ctx, fileConfig(path), client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, presenceRefresh)
+	}()
 
 	activity := client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "From the file"
@@ -133,7 +136,9 @@ func TestRunClearsPresenceWhenTheDocumentIsRemoved(t *testing.T) {
 	client := &recordingDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now, presenceRefresh) }()
+	go func() {
+		_ = run(ctx, fileConfig(path), client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, presenceRefresh)
+	}()
 
 	client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "From the file"
@@ -175,7 +180,9 @@ func TestRunIgnoresAHeartbeatOnlyRewrite(t *testing.T) {
 	client := &fakeDiscord{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = run(ctx, fileConfig(path), client, noArtwork{}, time.Now, presenceRefresh) }()
+	go func() {
+		_ = run(ctx, fileConfig(path), client, noArtwork{}, diag.Discard(), diag.Discard(), time.Now, presenceRefresh)
+	}()
 
 	client.waitFor(t, 5*time.Second, func(activity presence.Activity) bool {
 		return activity.Details == "Long track"
