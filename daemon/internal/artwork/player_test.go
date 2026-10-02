@@ -44,10 +44,7 @@ func TestPlayerAcceptsAnAllowlistedHost(t *testing.T) {
 	}
 	for _, url := range urls {
 		player := playerAnswering(snapshotOf("spotify:track:abc", url))
-		info, err := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
-		if err != nil {
-			t.Fatalf("Resolve() error = %v for %q", err, url)
-		}
+		info := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
 		if info.Image != url {
 			t.Errorf("Resolve() Image = %q; want %q", info.Image, url)
 		}
@@ -75,10 +72,7 @@ func TestPlayerRefusesEveryUnpublishableURL(t *testing.T) {
 	}
 	for _, url := range urls {
 		player := playerAnswering(snapshotOf("spotify:track:abc", url))
-		info, err := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
-		if err != nil {
-			t.Fatalf("Resolve() error = %v for %q", err, url)
-		}
+		info := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
 		if info.Image != "" {
 			t.Errorf("Resolve() published %q for %q; want an empty image", info.Image, url)
 		}
@@ -90,10 +84,7 @@ func TestPlayerRefusesEveryUnpublishableURL(t *testing.T) {
 // describes a different track and its artwork must not be used.
 func TestPlayerRefusesAnAnswerAboutAnotherTrack(t *testing.T) {
 	player := playerAnswering(snapshotOf("spotify:track:next", "https://i.scdn.co/image/next"))
-	info, err := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	info := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
 	if info.Image != "" {
 		t.Errorf("Resolve() Image = %q; want an empty image for a stale answer", info.Image)
 	}
@@ -112,10 +103,7 @@ func TestPlayerRefusesANearMissPath(t *testing.T) {
 	}
 	for _, path := range paths {
 		player := playerAnswering(snapshotOf(path, "https://i.scdn.co/image/x"))
-		info, err := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
-		if err != nil {
-			t.Fatalf("Resolve() error = %v for %q", err, path)
-		}
+		info := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
 		if info.Image != "" {
 			t.Errorf("Resolve() accepted %q as %q; want a miss", path, "spotify:track:abc")
 		}
@@ -132,10 +120,7 @@ func TestPlayerTreatsAFailedRequestAsAbsence(t *testing.T) {
 			return cliampipc.Snapshot{}, errors.New("no listener on socket")
 		},
 	}
-	info, err := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
-	if err != nil {
-		t.Fatalf("Resolve() error = %v; want a miss", err)
-	}
+	info := player.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc"})
 	if info.Image != "" {
 		t.Errorf("Resolve() Image = %q; want an empty image", info.Image)
 	}

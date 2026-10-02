@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
+	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
 )
 
 // lastFMReturning serves a track.getInfo response carrying the given body, so a
@@ -24,19 +25,6 @@ func lastFMReturning(t *testing.T, body string) *artwork.LastFM {
 	}))
 	t.Cleanup(server.Close)
 	return artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
-}
-
-// countingSource is a Source that answers with a fixed TrackInfo and records
-// how often it was asked, which is how a short-circuit is made visible.
-type countingSource struct {
-	info  artwork.TrackInfo
-	err   error
-	calls int
-}
-
-func (c *countingSource) Resolve(context.Context, artwork.Request) (artwork.TrackInfo, error) {
-	c.calls++
-	return c.info, c.err
 }
 
 // finalAnswer runs a staged resolve to completion and returns the answer it
@@ -139,8 +127,20 @@ func TestResolverDerivedTierDoesNotMoveTheLinks(t *testing.T) {
 
 // TestResolverDerivedTierShortCircuitsThePlayer pins the cost rule: a path the
 // derived source answers must not also cost a round trip.
+//
+// The stubbed reader counts what it was asked, because whether the player tier
+// ran is not a property of the merged answer — the derived thumbnail wins the
+// image either way, so the count is the only place the short-circuit shows. It
+// is a reader on the player's own seam rather than a second Source behind it:
+// the tier is one concrete type now, and the seam it already carries is enough
+// to see whether it was consulted.
 func TestResolverDerivedTierShortCircuitsThePlayer(t *testing.T) {
-	player := &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}}
+	const path = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	asked := 0
+	player := &artwork.Player{State: func(context.Context, string) (cliampipc.Snapshot, error) {
+		asked++
+		return snapshotOf(path, "https://i.scdn.co/image/x"), nil
+	}}
 	resolver := artwork.Resolver{
 		Derived: func(string) (string, bool) {
 			return "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg", true
@@ -148,11 +148,11 @@ func TestResolverDerivedTierShortCircuitsThePlayer(t *testing.T) {
 		Player: player,
 		LastFM: artwork.NewLastFM(""),
 	}
-	if _, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}); err != nil {
+	if _, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: path}); err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if player.calls != 0 {
-		t.Errorf("the player was asked %d times after the derived source answered; want 0", player.calls)
+	if asked != 0 {
+		t.Errorf("the player was asked %d times after the derived source answered; want 0", asked)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestResolverDerivedTierShortCircuitsThePlayer(t *testing.T) {
 // Last.fm request was issued; there is no second thing to assert.
 func TestResolverPlayerImageDoesNotShadowTheLinks(t *testing.T) {
 	resolver := artwork.Resolver{
-		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		Player: playerAnswering(snapshotOf("spotify:track:abc", "https://i.scdn.co/image/x")),
 		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"}}}`),
 	}
 	info, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
@@ -199,7 +199,7 @@ func TestResolverPlayerImageSurvivesALastFMFailure(t *testing.T) {
 	lastfm := artwork.NewLastFM("key", artwork.WithEndpoint(server.URL), artwork.WithHTTPClient(server.Client()))
 
 	resolver := artwork.Resolver{
-		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		Player: playerAnswering(snapshotOf("spotify:track:abc", "https://i.scdn.co/image/x")),
 		LastFM: lastfm,
 	}
 	info, err := finalAnswer(context.Background(), resolver, artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"})
@@ -231,7 +231,7 @@ func TestResolverIsUngatedByTheAPIKey(t *testing.T) {
 	}
 
 	player := artwork.Resolver{
-		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		Player: playerAnswering(snapshotOf("spotify:track:abc", "https://i.scdn.co/image/x")),
 		LastFM: artwork.NewLastFM(""),
 	}
 	info, err = finalAnswer(context.Background(), player, request)
@@ -310,7 +310,7 @@ func TestResolverReportsTheDerivedThumbnailBeforeAskingLastFM(t *testing.T) {
 func TestResolverReportsOnceWhenNoSourceIsFree(t *testing.T) {
 	reports := 0
 	resolver := artwork.Resolver{
-		Player: &countingSource{info: artwork.TrackInfo{Image: "https://i.scdn.co/image/x"}},
+		Player: playerAnswering(snapshotOf("spotify:track:abc", "https://i.scdn.co/image/x")),
 		LastFM: lastFMReturning(t, `{"track":{"url":"https://www.last.fm/music/A/_/T","artist":{"url":"https://www.last.fm/music/A"}}}`),
 	}
 	resolver.Resolve(context.Background(), artwork.Request{Path: "spotify:track:abc", Artist: "A", Title: "T"}, func(artwork.TrackInfo, error) {
