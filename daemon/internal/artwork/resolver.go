@@ -19,13 +19,17 @@ type Request struct {
 	Title  string
 }
 
-// Source yields the artwork one origin can supply for a track.
-type Source interface {
-	Resolve(context.Context, Request) (TrackInfo, error)
-}
-
 // Resolver merges the artwork sources for one track: the image from the first
 // of Derived, Player and LastFM that has one, and the pages always from LastFM.
+//
+// The three keep their own shapes rather than sharing an interface, because
+// they are three different things and the shapes are what say so. Derived is a
+// parse of the path: free, errorless, and known before any request is made.
+// Player is a round trip that yields an image and nothing else. LastFM yields
+// the pages always and an image only last. One type over all three would have
+// to carry whether it is free, which fields it may answer, and where it sits in
+// each of two orders — and the call order and the precedence order differ, so
+// it would describe the exceptions rather than remove them.
 type Resolver struct {
 	// Derived is the path-derived source, a pure function of the playback path
 	// with no I/O. It is consulted before the player, whose answer costs a round
@@ -36,7 +40,7 @@ type Resolver struct {
 	// Player is the artwork the player reports for the track itself. Its answer
 	// costs a round trip, so Derived short-circuits it. A nil value contributes
 	// nothing.
-	Player Source
+	Player *Player
 	// LastFM supplies the track and artist pages, and an image when neither of
 	// the others has one.
 	LastFM *LastFM
@@ -101,9 +105,5 @@ func (r Resolver) playerImage(ctx context.Context, request Request) string {
 	if r.Player == nil {
 		return ""
 	}
-	info, err := r.Player.Resolve(ctx, request)
-	if err != nil {
-		return ""
-	}
-	return info.Image
+	return r.Player.Resolve(ctx, request).Image
 }
