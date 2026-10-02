@@ -12,10 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"time"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 )
 
@@ -76,7 +76,11 @@ type event struct {
 // logged and dropped rather than republished. Discord therefore keeps showing
 // the last good snapshot, and that log line is the only account of why presence
 // stopped tracking.
-func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, error) {
+//
+// The line is written through logger, which the caller built with this
+// package's name, so it arrives already attributed and no call site here spells
+// the prefix itself.
+func Subscribe(ctx context.Context, socketPath string, logger diag.Logger) (<-chan playback.State, error) {
 	dialer := net.Dialer{Timeout: 3 * time.Second}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
@@ -138,7 +142,7 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, e
 		for scanner.Scan() {
 			var message event
 			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
-				log.Printf("cliamp: discarding undecodable frame: %v", err)
+				logger.Printf("discarding undecodable frame: %v", err)
 				continue
 			}
 			if message.Event != PlaybackTopic {
@@ -146,11 +150,11 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan playback.State, e
 			}
 			var state playback.State
 			if err := json.Unmarshal(message.Data, &state); err != nil {
-				log.Printf("cliamp: discarding unreadable %s snapshot: %v", PlaybackTopic, err)
+				logger.Printf("discarding unreadable %s snapshot: %v", PlaybackTopic, err)
 				continue
 			}
 			if err := state.Validate(); err != nil {
-				log.Printf("cliamp: discarding invalid %s snapshot: %v", PlaybackTopic, err)
+				logger.Printf("discarding invalid %s snapshot: %v", PlaybackTopic, err)
 				continue
 			}
 			state.ObservedAt = message.Time

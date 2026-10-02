@@ -15,13 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/artwork"
 	cliampipc "github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/cliamp"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
@@ -50,21 +50,17 @@ type validator interface {
 // unavailable. Optional features warn rather than fail, so a working setup is
 // never reported as broken.
 //
-// The Discord client is silenced for the duration: it logs its connection line
-// with a timestamp that would land in the middle of a deliberately timestamp-free
-// report, and nothing is lost, since every outcome it would announce already
-// appears in the report as a line of its own. Check runs once from main,
-// immediately before the process exits, so the global it redirects has no other
-// reader.
+// The Discord client is silenced: it logs its connection line with a timestamp
+// that would land in the middle of a deliberately timestamp-free report, and
+// nothing is lost, since every outcome it would announce already appears in the
+// report as a line of its own. The discarding logger it is handed is what
+// replaces the process-wide redirect this once performed, which had to be put
+// back afterwards and would have raced anything else in the process that logs.
 func Check(ctx context.Context, cfg config.Config) int {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
-	previous := log.Writer()
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(previous)
-
-	return check(ctx, cfg, discord.NewClient(cfg.ApplicationID), artwork.NewLastFM(cfg.LastFMAPIKey), os.Stdout)
+	return check(ctx, cfg, discord.NewClient(cfg.ApplicationID, diag.Discard()), artwork.NewLastFM(cfg.LastFMAPIKey), os.Stdout)
 }
 
 // check is the report itself. Its probes run in a deliberate order: the transport
@@ -146,7 +142,7 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 			reportPlugin(detail)
 		}
 	} else {
-		states, err := cliampipc.Subscribe(ctx, cfg.CliampSocket)
+		states, err := cliampipc.Subscribe(ctx, cfg.CliampSocket, diag.Discard())
 		if err != nil {
 			fail("cliamp", err.Error())
 			line("skip", "plugin", "not readable without a Cliamp subscription")

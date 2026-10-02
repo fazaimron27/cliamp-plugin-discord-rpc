@@ -15,12 +15,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/presence"
 )
 
@@ -33,14 +33,21 @@ type frame struct {
 // Client maintains one authenticated Discord IPC connection.
 type Client struct {
 	applicationID string
+	logger        diag.Logger
 	conn          net.Conn
 	nonce         uint64
 }
 
 // NewClient returns a client for the Discord application with no connection
 // open. Connect discovers the socket and completes the handshake.
-func NewClient(applicationID string) *Client {
-	return &Client{applicationID: applicationID}
+//
+// The logger is where Connect's one line about the socket it reached is
+// written. It is required rather than defaulted, because the caller that omits
+// it is the caller that has not decided where this component's output belongs,
+// and a silent default would hide that until someone went looking for a line
+// that was never written.
+func NewClient(applicationID string, logger diag.Logger) *Client {
+	return &Client{applicationID: applicationID, logger: logger}
 }
 
 // RejectionError reports that Discord took a request and refused its contents.
@@ -104,7 +111,7 @@ func (c *Client) Connect(ctx context.Context) error {
 			_ = c.Close()
 			continue
 		}
-		log.Printf("connected to Discord at %s", path)
+		c.logger.Printf("connected to Discord at %s", path)
 		return nil
 	}
 	switch {
