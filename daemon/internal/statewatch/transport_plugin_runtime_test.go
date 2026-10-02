@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,13 +44,25 @@ type pluginRecord struct {
 	// Retain is the p:publish option, which only a publish carries.
 	Retain bool
 	Body   json.RawMessage
+	// Text and Duration are the cliamp.message arguments, which only a
+	// message carries.
+	Text     string
+	Duration int
 }
 
 // runPlugin loads the real discord-rpc.lua under the stub Cliamp in testdata
-// and returns what it published and wrote, in order. transport is what
+// and returns what it published, wrote and said, in order. transport is what
 // config.toml would hold under [plugins.discord-rpc], with "nil" for a plugin
 // that was never configured.
 func runPlugin(t *testing.T, transport string) []pluginRecord {
+	t.Helper()
+	return runPluginScenario(t, transport, "")
+}
+
+// runPluginScenario runs the same driver over one of its extra scenarios, which
+// the default fixture does not carry. An empty scenario runs the default
+// fixture, which is what every other test reads.
+func runPluginScenario(t *testing.T, transport, scenario string) []pluginRecord {
 	t.Helper()
 	driver, err := filepath.Abs(filepath.Join("testdata", "plugin_driver.lua"))
 	if err != nil {
@@ -60,7 +73,12 @@ func runPlugin(t *testing.T, transport string) []pluginRecord {
 		t.Fatal(err)
 	}
 
-	command := exec.Command(luaRuntime(t), driver, plugin, transport)
+	arguments := []string{driver, plugin, transport}
+	if scenario != "" {
+		arguments = append(arguments, scenario)
+	}
+
+	command := exec.Command(luaRuntime(t), arguments...)
 	var stderr strings.Builder
 	command.Stderr = &stderr
 	output, err := command.Output()
@@ -80,6 +98,12 @@ func runPlugin(t *testing.T, transport string) []pluginRecord {
 		case "publish":
 			record.Retain = fields[1] == "true"
 			record.Body = json.RawMessage(fields[2])
+		case "message":
+			seconds, err := strconv.Atoi(fields[2])
+			if err != nil {
+				t.Fatalf("the driver produced a non-numeric duration: %q", line)
+			}
+			record.Text, record.Duration = fields[1], seconds
 		default:
 			t.Fatalf("the driver produced an unknown line: %q", line)
 		}
@@ -212,5 +236,93 @@ func TestPluginWritesTheDocumentTheDaemonReads(t *testing.T) {
 
 	if stopped := inspectWritten(t, writes[3].Body); stopped.State.IsPlaying() {
 		t.Errorf("the document written on quit still reads as playing: %+v", stopped.State)
+	}
+}
+
+// The plugin names the track it just handed over, so which track is on the
+// Discord card can be read in Cliamp rather than only in Discord. What it names
+// is what it sent, not what Discord is showing: nothing here reads the daemon
+// back, so a card Discord refused, or one it skipped as unchanged, still reads
+// as sent.
+//
+// Two announcements and not four comes from the dedupe latch, not from the call
+// sites: the fixture's heartbeat repeats the track it beat for and its quit
+// repeats the track it cleared, so both are the same line twice in a row and
+// both are swallowed. The status rule is held apart in
+// TestPluginAnnouncesNothingForAStoppedCard, where no earlier line exists to
+// repeat.
+func TestPluginAnnouncesTheTrackItPublished(t *testing.T) {
+	for _, transport := range []string{"nil", "file"} {
+		t.Run(transport, func(t *testing.T) {
+			messages := recordsOfKind(runPlugin(t, transport), "message")
+			if len(messages) != 2 {
+				t.Fatalf("announced %d times, want one per published track:\n%v", len(messages), messages)
+			}
+			want := []string{
+				"Broadcasting to Discord: Artist - Track",
+				"Broadcasting to Discord: Artist - Second Track",
+			}
+			for i, message := range messages {
+				if message.Text != want[i] {
+					t.Errorf("announcement %d = %q, want %q", i, message.Text, want[i])
+				}
+				if message.Duration != 10 {
+					t.Errorf("announcement %d lasts %ds, want the 10s the Last.fm plugin uses", i, message.Duration)
+				}
+			}
+		})
+	}
+}
+
+// A local file and a stream both report no artist, and a name built by
+// concatenation would read "Artist - " with the first half missing — a track
+// named by its separator. The title alone is what there is to say.
+//
+// The scenario adds its track change to the fixture rather than replacing the
+// fixture's own, so three tracks are published here and the artistless one is
+// the last.
+func TestPluginAnnouncesAnArtistlessTrackByTitleAlone(t *testing.T) {
+	messages := recordsOfKind(runPluginScenario(t, "nil", "no-artist"), "message")
+	if len(messages) != 3 {
+		t.Fatalf("announced %d times, want one per published track:\n%v", len(messages), messages)
+	}
+	if want := "Broadcasting to Discord: Second Track"; messages[2].Text != want {
+		t.Errorf("the artistless announcement = %q, want %q", messages[2].Text, want)
+	}
+}
+
+// Cliamp fires a seek for every step of a dragged progress bar, and each one
+// re-sends a track that has not changed, so announcing per event would be one
+// flash per step. The same text is announced once.
+//
+// The latch that does it cannot wedge the way the status document's did: the
+// text is rebuilt from the current track every time, so the next track always
+// clears it, where a record of having spoken outlived the thing it described.
+func TestPluginAnnouncesOnceWhileScrubbing(t *testing.T) {
+	messages := recordsOfKind(runPluginScenario(t, "nil", "seek"), "message")
+	if len(messages) != 2 {
+		t.Fatalf("two seeks inside one track produced %d announcements, want only the track's own:\n%v", len(messages), messages)
+	}
+	if want := "Broadcasting to Discord: Artist - Second Track"; messages[1].Text != want {
+		t.Errorf("the announcement after the seeks = %q, want %q", messages[1].Text, want)
+	}
+}
+
+// A Cliamp that starts with nothing playing publishes a stopped snapshot, whose
+// card is being cleared rather than showing a track. The latch cannot hide a
+// mistake here: nothing has been announced yet, so a line spoken for this
+// snapshot would be the first line of the run.
+//
+// This is the only place the status rule is observable. Everywhere else a
+// stopped snapshot repeats the line the latch already holds — the quit clears
+// the same track it was showing — and is swallowed whether or not the rule is
+// there.
+func TestPluginAnnouncesNothingForAStoppedCard(t *testing.T) {
+	messages := recordsOfKind(runPluginScenario(t, "nil", "stopped-start"), "message")
+	if len(messages) != 1 {
+		t.Fatalf("announced %d times, want only the track that followed the cleared card:\n%v", len(messages), messages)
+	}
+	if want := "Broadcasting to Discord: Artist - Second Track"; messages[0].Text != want {
+		t.Errorf("the announcement = %q, want %q", messages[0].Text, want)
 	}
 }
