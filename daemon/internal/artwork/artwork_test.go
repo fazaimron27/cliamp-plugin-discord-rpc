@@ -377,6 +377,20 @@ func TestLastFMResolveKeepsAPageItCanVouchForAndDropsTheOthers(t *testing.T) {
 			wantTrack:  "https://www.last.fm/music/Artist/_/Track",
 			wantArtist: "",
 		},
+		{
+			name:       "a track page carrying a credential is dropped while the artist page survives",
+			track:      "https://user:secret@www.last.fm/music/Artist/_/Track",
+			artist:     "https://www.last.fm/music/Artist",
+			wantTrack:  "",
+			wantArtist: "https://www.last.fm/music/Artist",
+		},
+		{
+			name:       "a track page with no host is dropped while the artist page survives",
+			track:      "https:///music/Artist/_/Track",
+			artist:     "https://www.last.fm/music/Artist",
+			wantTrack:  "",
+			wantArtist: "https://www.last.fm/music/Artist",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

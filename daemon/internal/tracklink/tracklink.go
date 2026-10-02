@@ -74,6 +74,32 @@ const (
 	neteasePage = "https://music.163.com/song?id=%s"
 )
 
+// PublishableHTTPS parses raw and reports whether it is a URL this daemon may
+// put on the card: HTTPS, and carrying no credential in its authority. The
+// parsed URL comes back with the answer so a caller needing more of it does
+// not parse twice.
+//
+// This is the one rule the five publishing sites share, and it lives here
+// because this package is where a value that must not be published is refused.
+// It is applied to the value rather than to what survives of it: the two
+// rebuild mechanisms below and the page pass-through all consult it before
+// they look at anything else, and so do the two artwork sources in the artwork
+// package. Leaving a rebuild site to drop the credential by construction would
+// make the guarantee a property of that rebuild instead of a property of the
+// rule — true today, and silently untrue the moment a mechanism republishes a
+// value it was handed.
+//
+// A caller that needs more says so where the extra requirement is visible:
+// Last.fm's pages must also name a host, and the player's artwork must also
+// sit on the CDN allowlist.
+func PublishableHTTPS(raw string) (*url.URL, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+		return nil, false
+	}
+	return parsed, true
+}
+
 // Link is a provider track's public identity: where it lives, and what to call
 // the provider when the destination is named on the card.
 type Link struct {
@@ -193,8 +219,8 @@ func fromVideoURL(path string) (Link, bool) {
 // validation site and a provider cannot become linkable without becoming
 // artwork-able in the same change.
 func videoPath(path string) (name, canonicalHost, id string, ok bool) {
-	parsed, err := url.Parse(path)
-	if err != nil || parsed.Scheme != "https" {
+	parsed, ok := PublishableHTTPS(path)
+	if !ok {
 		return "", "", "", false
 	}
 	host := normaliseHost(parsed.Hostname())
@@ -219,8 +245,8 @@ func videoPath(path string) (name, canonicalHost, id string, ok bool) {
 // is constructed from the validated id rather than reused, so the fragment
 // route, a parameter beside the id, and the host itself cannot ride along.
 func fromNeteaseURL(path string) (Link, bool) {
-	parsed, err := url.Parse(path)
-	if err != nil || parsed.Scheme != "https" {
+	parsed, ok := PublishableHTTPS(path)
+	if !ok {
 		return Link{}, false
 	}
 	if normaliseHost(parsed.Hostname()) != neteaseHost {
@@ -301,8 +327,8 @@ var pageProviders = []struct {
 // the provider chose — that is the whole of why this mechanism guarantees less
 // than the two above it.
 func fromPageURL(path string) (Link, bool) {
-	parsed, err := url.Parse(path)
-	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+	parsed, ok := PublishableHTTPS(path)
+	if !ok {
 		return Link{}, false
 	}
 	host := normaliseHost(parsed.Hostname())
