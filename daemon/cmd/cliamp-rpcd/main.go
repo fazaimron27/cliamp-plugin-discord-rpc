@@ -4,8 +4,9 @@
 package main
 
 // This file wires the process together. Configuration is read once at startup,
-// and the process then either answers and exits (--version, --check) or runs
-// until it is interrupted, clearing the activity on its way out.
+// and the process then either answers and exits (--version, --check), installs a
+// release and exits (--update, --rollback), or runs until it is interrupted,
+// clearing the activity on its way out.
 //
 // It is also the one place that decides where a running daemon's log lines go.
 // The two log.Fatal calls below stay on the standard library's logger, because
@@ -14,10 +15,10 @@ package main
 // second reports a Run that has already returned, which leaves the process
 // itself as the only thing to name.
 //
-// The explicit stop() before os.Exit in the --check path is load-bearing.
-// os.Exit skips deferred calls, so the deferred stop() never runs on that path,
-// and deleting the explicit one because the defer looks like it covers the case
-// is the exact mistake this paragraph exists to prevent.
+// The explicit stop() before os.Exit in each answer-or-install path is
+// load-bearing. os.Exit skips deferred calls, so the deferred stop() never runs
+// on those paths, and deleting an explicit one because the defer looks like it
+// covers the case is the exact mistake this paragraph exists to prevent.
 
 import (
 	"context"
@@ -51,6 +52,17 @@ func main() {
 	}
 	if cfg.ShowCheck {
 		code := daemon.Check(ctx, cfg)
+		stop()
+		os.Exit(code)
+	}
+
+	if cfg.ShowUpdate {
+		code := daemon.Update(ctx, cfg)
+		stop()
+		os.Exit(code)
+	}
+	if cfg.ShowRollback {
+		code := daemon.Rollback(ctx, cfg)
 		stop()
 		os.Exit(code)
 	}
