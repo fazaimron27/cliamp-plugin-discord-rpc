@@ -1,12 +1,19 @@
 package daemon
 
-// This file is the self-update: one command that installs a newer release, and
-// one that installs the release before it.
+// This file is the self-update: one command that installs the newest release, or
+// a release the user names. It installs forward and never back.
 //
 // Nothing here runs on its own and nothing here runs inside the unit. The unit
 // is hardened with ProtectHome=read-only, so a daemon started by it cannot write
 // the binary it would be replacing; installing is a process the user starts, and
 // this program is that process when it is given --update.
+//
+// There is deliberately no way back. Nothing keeps the binary being replaced, so
+// an older release is only reachable by installing it from GitHub, and a command
+// that re-fetched one would be the same install with a different tag argument
+// rather than a second capability. Installing the release a user names is what
+// --update does, and a tag older than the running release is refused instead of
+// served.
 //
 // The installing itself is not implemented here. The target release's own
 // install.sh is fetched and run, so the download, attestation, and checksum
@@ -27,19 +34,9 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
-// upgradeMode names which of the two commands is running. The tag is chosen
-// differently for each and every step after that is the same.
-type upgradeMode int
-
-const (
-	modeUpdate upgradeMode = iota
-	modeRollback
-)
-
 // releaseSource is the slice of the release package the update path needs.
 type releaseSource interface {
 	Latest(context.Context) (string, error)
-	Tags(context.Context) ([]string, error)
 	Script(context.Context, string) ([]byte, error)
 }
 
@@ -65,29 +62,6 @@ type upgradeDeps struct {
 // unconditionally, and sh, which this program invokes itself.
 var upgradeTools = []string{"sh", "awk", "curl", "gh", "sha256sum", "tar", "uname", "mktemp", "install"}
 
-// previousTag returns the newest tag in tags that is strictly older than current,
-// reporting false when there is none.
-//
-// Strictly older is version.Newer with the arguments the other way round, and
-// "newest" is the same comparison over the candidates, so no ordering rule is
-// written here that could disagree with the one the release check uses.
-//
-// The list's order is deliberately not used. GitHub publishes the feed newest
-// first, but a rule that read position instead of comparing versions would pick a
-// different release the day that changed.
-func previousTag(tags []string, current string) (string, bool) {
-	best := ""
-	for _, candidate := range tags {
-		if !version.Newer(candidate, current) {
-			continue
-		}
-		if best == "" || version.Newer(best, candidate) {
-			best = candidate
-		}
-	}
-	return best, best != ""
-}
-
 // missingTools returns the first command in upgradeTools that PATH does not
 // hold, or an empty string when it holds them all.
 //
@@ -111,9 +85,16 @@ func missingTools(lookPath func(string) (string, error)) string {
 // tag is answered immediately, rather than after a PATH complaint about a command
 // that a valid run would never have reached.
 //
-// An explicit tag is obeyed as given, including when it is not newer than this
-// daemon: pinning a version and stepping back on purpose are the same request,
-// and second-guessing either would make --rollback's explicit form useless.
+// A tag older than the running release is refused, and the refusal is where that
+// rule lives rather than in the installation: a request this command cannot serve
+// is answered before anything is fetched, so a user who named the wrong tag is
+// told so instead of watching an install they did not want begin. Nothing keeps
+// the binary being replaced, so there is no release to go back to and no second
+// command that could install one; an older release is only reachable from GitHub
+// by hand, and this line is the whole of the refusal.
+//
+// The running release itself is allowed. Reinstalling it is a request this
+// command can serve, and the no-op message resolveTarget prints names it.
 func explicitTag(given string, out io.Writer) (string, bool) {
 	if given == "" {
 		return "", true
@@ -123,43 +104,39 @@ func explicitTag(given string, out io.Writer) (string, bool) {
 		fmt.Fprintf(out, "not a release tag: %s\n", given)
 		return "", false
 	}
+	if version.Newer(target, version.Number) {
+		fmt.Fprintf(out,
+			"%s is older than the running v%s, and this command does not install older releases\n",
+			tag(target), version.Number)
+		return "", false
+	}
 	return target, true
 }
 
 // resolveTarget asks GitHub which release to install when the user named none.
-// It is the only request the tag step makes, and it is reached after the
-// preflight has already passed. It reports stop when the run is over before
-// anything was installed, with the code to return.
-func resolveTarget(ctx context.Context, mode upgradeMode, releases releaseSource, out io.Writer) (string, bool, int) {
-	if mode == modeUpdate {
-		latest, err := releases.Latest(ctx)
-		if err != nil {
-			fmt.Fprintf(out, "could not ask GitHub for the newest release: %v\n", err)
-			return "", true, 1
-		}
-		target := version.Normalize(latest)
-		if !version.Newer(version.Number, target) {
-			fmt.Fprintf(out,
-				"v%s is already the newest release; nothing to update. To reinstall it: cliamp-rpcd --update v%s\n",
-				version.Number, version.Number)
-			return "", true, 0
-		}
-		return target, false, 0
-	}
-
-	tags, err := releases.Tags(ctx)
+// It is reached after the preflight has already passed. It reports stop when the
+// run is over before anything was installed, with the code to return.
+//
+// An answer that is not newer than this daemon stops the run as a success rather
+// than a refusal. It is not a request the user made, so there is nothing to
+// refuse: a machine already at or ahead of the newest release has nothing to do,
+// and exit 0 is what "nothing to do" means. This is also the only path that can
+// see a tag older than the running one, which happens when the running binary is
+// newer than anything published — a local build, or a release withdrawn since.
+func resolveTarget(ctx context.Context, releases releaseSource, out io.Writer) (string, bool, int) {
+	latest, err := releases.Latest(ctx)
 	if err != nil {
-		fmt.Fprintf(out, "could not ask GitHub which releases exist: %v\n", err)
+		fmt.Fprintf(out, "could not ask GitHub for the newest release: %v\n", err)
 		return "", true, 1
 	}
-	previous, ok := previousTag(tags, version.Number)
-	if !ok {
+	target := version.Normalize(latest)
+	if !version.Newer(version.Number, target) {
 		fmt.Fprintf(out,
-			"no release older than v%s is listed for %s; name one with: cliamp-rpcd --rollback <tag>\n",
-			version.Number, release.Repository)
-		return "", true, 1
+			"v%s is already the newest release; nothing to update. To reinstall it: cliamp-rpcd --update v%s\n",
+			version.Number, version.Number)
+		return "", true, 0
 	}
-	return version.Normalize(previous), false, 0
+	return target, false, 0
 }
 
 // installRelease fetches the target release's own installer and runs it.
@@ -339,26 +316,20 @@ func restart(ctx context.Context, deps upgradeDeps, out io.Writer) {
 	reportLine(out, "ok", "service", "restarted "+serviceName)
 }
 
-// upgrade is both commands: the tag is chosen differently for each and nothing
-// after it differs.
-//
-// The order is the spec's and it is fixed: validate an explicit tag, preflight the
+// upgrade is the whole of --update: validate an explicit tag, preflight the
 // tools, resolve the tag if none was given, install the daemon, install the
-// plugin, restart. The first two make no request and the third is the only one
-// that does, so a bad tag or a missing command is answered without touching the
-// network at all.
+// plugin, restart.
+//
+// The order is the spec's and it is fixed. The first two make no request and the
+// third is the only one that does, so a bad tag or a missing command is answered
+// without touching the network at all.
 //
 // Every step stops the sequence on failure and nothing after it runs. That is
 // what keeps the pair matched: the daemon binary is already replaced by the time
 // the plugin step runs, so a failed plugin would leave a new daemon to be started
 // against the plugin it no longer matches, which is the state this command
 // exists to avoid.
-//
-// The way back is named whenever the daemon half reached disk, including when the
-// plugin step then failed. That is the case most likely to want it: the user is
-// left with a replaced binary and an un-updated plugin, and no other line of the
-// report mentions that a release before this one can be installed.
-func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgradeDeps, out io.Writer) int {
+func upgrade(ctx context.Context, cfg config.Config, deps upgradeDeps, out io.Writer) int {
 	target, ok := explicitTag(cfg.ReleaseTag, out)
 	if !ok {
 		return 1
@@ -370,7 +341,7 @@ func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgr
 	if target == "" {
 		var stop bool
 		var code int
-		target, stop, code = resolveTarget(ctx, mode, deps.releases, out)
+		target, stop, code = resolveTarget(ctx, deps.releases, out)
 		if stop {
 			return code
 		}
@@ -388,7 +359,6 @@ func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgr
 	if pluginInstalled {
 		restart(ctx, deps, out)
 	}
-	fmt.Fprintf(out, "to go back: cliamp-rpcd --rollback\n")
 	if !pluginInstalled {
 		return 1
 	}
@@ -448,8 +418,8 @@ func executablePath() string {
 	return path
 }
 
-// newUpgradeDeps is the production wiring, shared by both commands so they cannot
-// reach outside themselves differently.
+// newUpgradeDeps is the production wiring, gathered in one place so the sequence
+// reaches outside itself in exactly one way rather than at each step's call site.
 //
 // It takes no writer now that the runner captures: a child's output goes to the
 // report only through the step that ran it, which is what keeps a failure's
@@ -468,20 +438,13 @@ func newUpgradeDeps() upgradeDeps {
 // process exit code: 0 when both halves were installed, non-zero when either was
 // not.
 //
+// A named tag must not be older than the running release; explicitTag is where
+// that is refused and where the reasoning for it lives.
+//
 // It runs the same way whatever started it. Started by hand it replaces the
 // binary under $HOME; started by the unit it fails, because ProtectHome=read-only
 // is what makes the daemon unable to write the files it reads, and that is a
 // property worth keeping.
 func Update(ctx context.Context, cfg config.Config) int {
-	return upgrade(ctx, cfg, modeUpdate, newUpgradeDeps(), os.Stdout)
-}
-
-// Rollback installs the newest release strictly older than this daemon, or the
-// tag the user named, and returns the process exit code.
-//
-// It steps down one release per run rather than toggling: the release to go back
-// to is derived from GitHub's list each time, so nothing about the previous
-// version is stored on this machine and uninstall.sh has nothing new to clean up.
-func Rollback(ctx context.Context, cfg config.Config) int {
-	return upgrade(ctx, cfg, modeRollback, newUpgradeDeps(), os.Stdout)
+	return upgrade(ctx, cfg, newUpgradeDeps(), os.Stdout)
 }

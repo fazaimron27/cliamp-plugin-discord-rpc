@@ -220,8 +220,8 @@ cliamp-plugin-discord-rpc/
   which runs beside the loop rather than in it so a slow GitHub cannot delay a
   presence update. It also owns the `--check` diagnostic, which probes the same
   transports in isolation and reports them without starting the run loop, and the
-  `--update` and `--rollback` commands, which install a release by running that
-  release's own installer rather than by carrying one of their own.
+  `--update` command, which installs a release by running that release's own
+  installer rather than by carrying one of its own.
 - `daemon/internal/style` holds this repository's comment convention, the one
   written for contributors in `docs/comments.md`. It has no API on purpose: a
   convention belongs to no single package, so this one exists to give the guard

@@ -207,7 +207,7 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 
 	help := string(output)
-	for _, option := range []string{"--app-id", "--check", "--config", "--large-image", "--large-text", "--max-age", "--rollback", "--socket", "--transport", "--update", "--version"} {
+	for _, option := range []string{"--app-id", "--check", "--config", "--large-image", "--large-text", "--max-age", "--socket", "--transport", "--update", "--version"} {
 		if !strings.Contains(help, option) {
 			t.Errorf("help does not contain %q:\n%s", option, help)
 		}
@@ -223,9 +223,9 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 }
 
-// A tag is only meaningful with one of the two modes, so it is refused rather
-// than ignored: a positional argument used to be discarded silently, and a user
-// who typed a version would have had nothing installed and no complaint.
+// A tag is only meaningful with --update, so it is refused rather than ignored: a
+// positional argument used to be discarded silently, and a user who typed a
+// version would have had nothing installed and no complaint.
 func TestLoadRejectsATagWithNoMode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, args := range [][]string{{"v1.12.0"}, {"--check", "v1.12.0"}, {"--version", "v1.12.0"}} {
@@ -235,14 +235,13 @@ func TestLoadRejectsATagWithNoMode(t *testing.T) {
 	}
 }
 
-// Two modes at once, and a mode combined with an answer-and-exit flag, are both
-// contradictory rather than a precedence question.
+// Installing and answering are different jobs for one process, so a command that
+// asks for both is contradictory rather than a precedence question.
 func TestLoadRejectsContradictoryModes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, args := range [][]string{
-		{"--update", "--rollback"},
 		{"--update", "--check"},
-		{"--rollback", "--version"},
+		{"--update", "--version"},
 	} {
 		if _, err := config.Load(args); err == nil {
 			t.Fatalf("Load(%v) accepted contradictory modes", args)
@@ -250,23 +249,21 @@ func TestLoadRejectsContradictoryModes(t *testing.T) {
 	}
 }
 
-// The modes and their tag reach Config, and the tag keeps the spelling it was
-// given: normalizing it is the update path's business, not the parser's.
-func TestLoadAcceptsTheUpdateModes(t *testing.T) {
+// The mode and its tag reach Config, and the tag keeps the spelling it was given:
+// normalizing it, and refusing one this command cannot serve, are the update
+// path's business rather than the parser's.
+func TestLoadAcceptsTheUpdateMode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
 	t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "")
 	tests := []struct {
-		name   string
-		args   []string
-		update bool
-		roll   bool
-		tag    string
+		name string
+		args []string
+		tag  string
 	}{
-		{"update with no tag", []string{"--update"}, true, false, ""},
-		{"update with a tag", []string{"--update", "v1.12.0"}, true, false, "v1.12.0"},
-		{"update with a bare version", []string{"--update", "1.12.0"}, true, false, "1.12.0"},
-		{"rollback with a tag", []string{"--rollback", "v1.10.1"}, false, true, "v1.10.1"},
+		{"update with no tag", []string{"--update"}, ""},
+		{"update with a tag", []string{"--update", "v1.12.0"}, "v1.12.0"},
+		{"update with a bare version", []string{"--update", "1.12.0"}, "1.12.0"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -274,11 +271,8 @@ func TestLoadAcceptsTheUpdateModes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load(%v): %v", test.args, err)
 			}
-			if cfg.ShowUpdate != test.update {
-				t.Errorf("ShowUpdate = %v, want %v", cfg.ShowUpdate, test.update)
-			}
-			if cfg.ShowRollback != test.roll {
-				t.Errorf("ShowRollback = %v, want %v", cfg.ShowRollback, test.roll)
+			if !cfg.ShowUpdate {
+				t.Error("ShowUpdate = false, want true")
 			}
 			if cfg.ReleaseTag != test.tag {
 				t.Errorf("ReleaseTag = %q, want %q", cfg.ReleaseTag, test.tag)
@@ -292,7 +286,7 @@ func TestLoadAcceptsTheUpdateModes(t *testing.T) {
 // usage text puts the tag last for that reason.
 func TestLoadRejectsASecondPositional(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if _, err := config.Load([]string{"--update", "v1.12.0", "--rollback"}); err == nil {
+	if _, err := config.Load([]string{"--update", "v1.12.0", "--check"}); err == nil {
 		t.Fatal("Load accepted two positional arguments")
 	}
 }

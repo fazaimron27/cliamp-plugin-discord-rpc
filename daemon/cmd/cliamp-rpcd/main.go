@@ -5,7 +5,7 @@ package main
 
 // This file wires the process together. Configuration is read once at startup,
 // and the process then either answers and exits (--version, --check), installs a
-// release and exits (--update, --rollback), or runs until it is interrupted,
+// release and exits (--update), or runs until it is interrupted,
 // clearing the activity on its way out.
 //
 // It is also the one place that decides where a running daemon's log lines go.
@@ -58,11 +58,6 @@ func main() {
 
 	if cfg.ShowUpdate {
 		code := daemon.Update(ctx, cfg)
-		stop()
-		os.Exit(code)
-	}
-	if cfg.ShowRollback {
-		code := daemon.Rollback(ctx, cfg)
 		stop()
 		os.Exit(code)
 	}

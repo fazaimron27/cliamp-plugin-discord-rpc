@@ -89,7 +89,6 @@ func (r *recorder) count() int {
 // on asked being empty rather than trusting that none happened.
 type fakeSource struct {
 	latest string
-	tags   []string
 	script []byte
 	err    error
 	asked  []string
@@ -102,15 +101,6 @@ func (f *fakeSource) Latest(ctx context.Context) (string, error) {
 		return "", f.err
 	}
 	return f.latest, nil
-}
-
-// Tags answers with the released tags, or the error the fake holds.
-func (f *fakeSource) Tags(ctx context.Context) ([]string, error) {
-	f.asked = append(f.asked, "Tags")
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.tags, nil
 }
 
 // Script answers with the installer body, recording the tag it was asked for.
@@ -128,7 +118,7 @@ func (f *fakeSource) Script(ctx context.Context, tag string) ([]byte, error) {
 func (f *fakeSource) lookups() []string {
 	var asked []string
 	for _, question := range f.asked {
-		if question == "Latest" || question == "Tags" {
+		if question == "Latest" {
 			asked = append(asked, question)
 		}
 	}
@@ -175,8 +165,8 @@ func newHarness() *harness {
 }
 
 // upgrade runs the sequence and returns its exit code.
-func (h *harness) upgrade(mode upgradeMode, cfg config.Config) int {
-	return upgrade(context.Background(), cfg, mode, h.deps, &h.out)
+func (h *harness) upgrade(cfg config.Config) int {
+	return upgrade(context.Background(), cfg, h.deps, &h.out)
 }
 
 // setBinDir makes the environment name a bin directory, which is what
@@ -204,7 +194,7 @@ func TestUpdateReportsEachStepOnOneLine(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
 
-	if code := h.upgrade(modeUpdate, config.Config{}); code != 0 {
+	if code := h.upgrade(config.Config{}); code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
 	}
 	for _, want := range []struct {
@@ -246,7 +236,7 @@ func TestUpdateKeepsTheTrustCliampRecorded(t *testing.T) {
 	h.src.latest = "v1.12.0"
 	h.run.output = []byte(cliampInstallOutput)
 
-	if code := h.upgrade(modeUpdate, config.Config{}); code != 0 {
+	if code := h.upgrade(config.Config{}); code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
 	}
 	step, ok := lineFor(h.out.String(), "plugin")
@@ -287,7 +277,7 @@ func TestUpdateReplaysTheOutputOfAFailedCommand(t *testing.T) {
 	h.run.output = []byte("curl: (7) Failed to connect to github.com port 443\n")
 	h.run.failAt = 1
 
-	if code := h.upgrade(modeUpdate, config.Config{}); code == 0 {
+	if code := h.upgrade(config.Config{}); code == 0 {
 		t.Fatalf("exit code = 0 after a failed install:\n%s", h.out.String())
 	}
 	if !strings.Contains(h.out.String(), "curl: (7) Failed to connect to github.com port 443") {
@@ -308,7 +298,7 @@ func TestUpdateKeepsAReplayedFailureOnItsOwnLine(t *testing.T) {
 	h.run.output = []byte("  % Total    % Received % Xferd")
 	h.run.failAt = 1
 
-	if code := h.upgrade(modeUpdate, config.Config{}); code == 0 {
+	if code := h.upgrade(config.Config{}); code == 0 {
 		t.Fatalf("exit code = 0 after a failed install:\n%s", h.out.String())
 	}
 	if !strings.Contains(h.out.String(), "Xferd\n") {
@@ -324,7 +314,7 @@ func TestUpdateDropsTheOutputOfASuccessfulCommand(t *testing.T) {
 	h.src.latest = "v1.12.0"
 	h.run.output = []byte("  % Total    % Received % Xferd  Average Speed   Time\n100   5568  100   5568    0     0  12687      0\n")
 
-	if code := h.upgrade(modeUpdate, config.Config{}); code != 0 {
+	if code := h.upgrade(config.Config{}); code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
 	}
 	if strings.Contains(h.out.String(), "Xferd") {
@@ -341,7 +331,7 @@ func TestUpdateInstallsTheDaemonHalf(t *testing.T) {
 	h.deps.binDir = "/home/user/.local/bin"
 	h.src.latest = "v1.12.0"
 
-	code := h.upgrade(modeUpdate, config.Config{})
+	code := h.upgrade(config.Config{})
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -368,7 +358,7 @@ func TestUpdateInstallsIntoTheRunningBinarysDirectory(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
 
-	h.upgrade(modeUpdate, config.Config{})
+	h.upgrade(config.Config{})
 
 	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin"
 	if got := h.run.commands(); got[0] != want {
@@ -383,7 +373,7 @@ func TestUpdateHonorsTheBinDirOverride(t *testing.T) {
 	h.setBinDir("/opt/cliamp/bin")
 	h.src.latest = "v1.12.0"
 
-	h.upgrade(modeUpdate, config.Config{})
+	h.upgrade(config.Config{})
 
 	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /opt/cliamp/bin"
 	if got := h.run.commands(); got[0] != want {
@@ -398,7 +388,7 @@ func TestUpdateDoesNothingWhenThisIsAlreadyTheNewestRelease(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v" + version.Number
 
-	code := h.upgrade(modeUpdate, config.Config{})
+	code := h.upgrade(config.Config{})
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -411,17 +401,40 @@ func TestUpdateDoesNothingWhenThisIsAlreadyTheNewestRelease(t *testing.T) {
 	}
 }
 
-// An explicit tag is how a version is pinned or a downgrade made on purpose, so
-// it is obeyed without asking GitHub anything and without a newer-than test.
-// A bare version is the same request: version.Normalize drops the "v" and
-// install.sh is handed the "v" back, because it refuses a version without one.
+// The derivation can see a tag older than this daemon when the running binary is
+// newer than anything published — a local build, or a release withdrawn since.
+// The answer is the same no-op as the equal case, and a success rather than the
+// refusal an older explicit tag gets: the user asked for no particular release,
+// so there is no request to refuse, and a machine ahead of the release list has
+// nothing to do.
+func TestUpdateDoesNothingWhenTheNewestReleaseIsOlderThanThisOne(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v1.10.1"
+
+	code := h.upgrade(config.Config{})
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
+	}
+	if h.run.count() != 0 {
+		t.Fatalf("commands = %v, want none", h.run.commands())
+	}
+	if !strings.Contains(h.out.String(), "is already the newest release") {
+		t.Fatalf("output does not say the release is current:\n%s", h.out.String())
+	}
+}
+
+// An explicit tag is obeyed without asking GitHub anything: naming the release is
+// the answer to the question the derivation would ask. A bare version is the same
+// request — version.Normalize drops the "v" and install.sh is handed the "v" back,
+// because it refuses a version without one.
 func TestUpdateObeysAnExplicitTagWithoutAsking(t *testing.T) {
-	for _, given := range []string{"v1.10.1", "1.10.1", " v1.10.1 "} {
+	for _, given := range []string{"v1.12.0", "1.12.0", " v1.12.0 "} {
 		t.Run(given, func(t *testing.T) {
 			h := newHarness()
 			h.src.latest = "v9.9.9"
 
-			code := h.upgrade(modeUpdate, config.Config{ReleaseTag: given})
+			code := h.upgrade(config.Config{ReleaseTag: given})
 
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -429,11 +442,55 @@ func TestUpdateObeysAnExplicitTagWithoutAsking(t *testing.T) {
 			if len(h.src.lookups()) != 0 {
 				t.Fatalf("the release host was asked %v, want no lookup", h.src.lookups())
 			}
-			want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.10.1 --bin-dir /home/user/.local/bin"
+			want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin"
 			if got := h.run.commands(); got[0] != want {
 				t.Fatalf("commands = %v, want %s", got, want)
 			}
 		})
+	}
+}
+
+// Reinstalling the running release is a request this command can serve, and it is
+// the one the no-op message names. It is the boundary the older-tag refusal must
+// not cross: "not newer" is refused, "not older" is not, and the two differ by
+// exactly this case.
+func TestUpdateReinstallsTheRunningRelease(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v9.9.9"
+
+	code := h.upgrade(config.Config{ReleaseTag: "v" + version.Number})
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
+	}
+	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v" + version.Number + " --bin-dir /home/user/.local/bin"
+	if got := h.run.commands(); got[0] != want {
+		t.Fatalf("commands = %v, want %s", got, want)
+	}
+}
+
+// A tag older than the running release is refused rather than installed: this
+// command goes forward only, and the refusal is answered before anything is
+// fetched or run. PATH is deliberately broken here as well, so the refusal is
+// known to come from the tag check, which runs first, and not from the preflight
+// that follows it.
+func TestUpdateRefusesAnExplicitTagOlderThanTheRunningRelease(t *testing.T) {
+	h := newHarness()
+	h.deps.lookPath = lookPathWithout("gh")
+
+	code := h.upgrade(config.Config{ReleaseTag: "v1.10.1"})
+
+	if code == 0 {
+		t.Fatalf("exit code = 0 for a tag older than the running release:\n%s", h.out.String())
+	}
+	if len(h.src.asked) != 0 || h.run.count() != 0 {
+		t.Fatalf("an older tag reached %v and ran %v", h.src.asked, h.run.commands())
+	}
+	if !strings.Contains(h.out.String(), "v1.10.1 is older than the running v"+version.Number) {
+		t.Fatalf("output does not explain the refusal:\n%s", h.out.String())
+	}
+	if strings.Contains(h.out.String(), "required command not found") {
+		t.Fatalf("the tag was checked after the preflight:\n%s", h.out.String())
 	}
 }
 
@@ -445,7 +502,7 @@ func TestUpdateRefusesATagThatIsNotARelease(t *testing.T) {
 	h := newHarness()
 	h.deps.lookPath = lookPathWithout("gh")
 
-	code := h.upgrade(modeUpdate, config.Config{ReleaseTag: "nightly"})
+	code := h.upgrade(config.Config{ReleaseTag: "nightly"})
 
 	if code == 0 {
 		t.Fatalf("exit code = 0 for a tag that is not a release:\n%s", h.out.String())
@@ -469,7 +526,7 @@ func TestUpdateRefusesBeforeAskingWhenAToolIsMissing(t *testing.T) {
 			h := newHarness()
 			h.deps.lookPath = lookPathWithout(missing)
 
-			code := h.upgrade(modeUpdate, config.Config{})
+			code := h.upgrade(config.Config{})
 
 			if code == 0 {
 				t.Fatalf("exit code = 0 without %s:\n%s", missing, h.out.String())
@@ -501,7 +558,7 @@ func TestUpdateStopsWhenTheReleaseCannotBeFetched(t *testing.T) {
 			h := newHarness()
 			h.src.err = errors.New("installer download failed")
 
-			code := h.upgrade(modeUpdate, test.cfg)
+			code := h.upgrade(test.cfg)
 
 			if code == 0 {
 				t.Fatalf("exit code = 0 for an unreachable release:\n%s", h.out.String())
@@ -513,21 +570,6 @@ func TestUpdateStopsWhenTheReleaseCannotBeFetched(t *testing.T) {
 	}
 }
 
-// The rollback lookup has the same two failure points, reached through Tags.
-func TestRollbackStopsWhenTheReleaseCannotBeFetched(t *testing.T) {
-	h := newHarness()
-	h.src.err = errors.New("release feed lookup failed")
-
-	code := h.upgrade(modeRollback, config.Config{})
-
-	if code == 0 {
-		t.Fatalf("exit code = 0 for an unreachable feed:\n%s", h.out.String())
-	}
-	if h.run.count() != 0 {
-		t.Fatalf("commands = %v, want none", h.run.commands())
-	}
-}
-
 // A failed install stops the run and installs nothing more: install.sh verifies
 // before it writes, so a refusal leaves the previous binary where it was. This is
 // also what a read-only $HOME produces when --update is run from inside the unit.
@@ -536,7 +578,7 @@ func TestUpdateStopsWhenTheInstallerFails(t *testing.T) {
 	h.src.latest = "v1.12.0"
 	h.run.failAt = 1
 
-	code := h.upgrade(modeUpdate, config.Config{})
+	code := h.upgrade(config.Config{})
 
 	if code == 0 {
 		t.Fatalf("exit code = 0 after a failed install:\n%s", h.out.String())
@@ -561,7 +603,7 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
 
-	code := h.upgrade(modeUpdate, config.Config{})
+	code := h.upgrade(config.Config{})
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -585,7 +627,6 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 		"v" + version.Number + " -> v1.12.0, attestation and checksum verified",
 		"installed v1.12.0",
 		"restarted cliamp-rpcd.service",
-		"to go back: cliamp-rpcd --rollback",
 	} {
 		if !strings.Contains(h.out.String(), line) {
 			t.Fatalf("output omits %q:\n%s", line, h.out.String())
@@ -600,7 +641,7 @@ func TestUpdateUsesTryRestart(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
 
-	h.upgrade(modeUpdate, config.Config{})
+	h.upgrade(config.Config{})
 
 	restartCommand := h.run.commands()[3]
 	if restartCommand != "systemctl --user try-restart cliamp-rpcd.service" {
@@ -611,14 +652,13 @@ func TestUpdateUsesTryRestart(t *testing.T) {
 // A missing cliamp leaves the daemon half installed and the pair mismatched, so
 // the run is not a success: it names both commands for the user to run, and it
 // stops before the restart rather than bringing the new daemon up against the
-// plugin it no longer matches. It still names the way back, because the half it
-// did install is the half the user might want undone.
+// plugin it no longer matches.
 func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
 	h.deps.lookPath = lookPathWithout("cliamp")
 
-	code := h.upgrade(modeUpdate, config.Config{})
+	code := h.upgrade(config.Config{})
 
 	if code == 0 {
 		t.Fatalf("exit code = 0 with no plugin half installed:\n%s", h.out.String())
@@ -629,7 +669,6 @@ func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
 	for _, want := range []string{
 		"cliamp plugins remove discord-rpc",
 		"cliamp plugins install " + release.Repository + "@v1.12.0",
-		"to go back: cliamp-rpcd --rollback",
 	} {
 		if !strings.Contains(h.out.String(), want) {
 			t.Fatalf("output omits %q:\n%s", want, h.out.String())
@@ -660,7 +699,7 @@ func TestUpdateWarnsButSucceedsWhenTheRestartCannotRun(t *testing.T) {
 			h.deps.lookPath = test.lookPath
 			h.run.failAt = test.failAt
 
-			code := h.upgrade(modeUpdate, config.Config{})
+			code := h.upgrade(config.Config{})
 
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -691,7 +730,7 @@ func TestUpdateStopsAtTheFirstFailedStep(t *testing.T) {
 			h.src.latest = "v1.12.0"
 			h.run.failAt = test.failAt
 
-			code := h.upgrade(modeUpdate, config.Config{})
+			code := h.upgrade(config.Config{})
 
 			if code == 0 {
 				t.Fatalf("exit code = 0 after %s failed:\n%s", test.name, h.out.String())
@@ -714,7 +753,7 @@ func TestUpdateNamesTheInstallCommandWhenThePluginInstallFails(t *testing.T) {
 	h.src.latest = "v1.12.0"
 	h.run.failAt = 3
 
-	h.upgrade(modeUpdate, config.Config{})
+	h.upgrade(config.Config{})
 
 	want := "Run: cliamp plugins install " + release.Repository + "@v1.12.0"
 	if !strings.Contains(h.out.String(), want) {
@@ -730,7 +769,7 @@ func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
 	h.src.latest = "v1.12.0"
 	h.run.failAt = 2
 
-	code := h.upgrade(modeUpdate, config.Config{})
+	code := h.upgrade(config.Config{})
 
 	if code != 0 {
 		t.Fatalf("exit code = %d after a failed removal, want 0:\n%s", code, h.out.String())
@@ -752,7 +791,7 @@ func TestUpdateAlwaysApprovesThePluginTrust(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
 
-	code := h.upgrade(modeUpdate, config.Config{})
+	code := h.upgrade(config.Config{})
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -760,91 +799,6 @@ func TestUpdateAlwaysApprovesThePluginTrust(t *testing.T) {
 	want := "cliamp plugins install " + release.Repository + "@v1.12.0 --yes"
 	if got := h.run.commands()[2]; got != want {
 		t.Fatalf("command 3 = %q, want %q", got, want)
-	}
-}
-
-// Rolling back is the same sequence with a tag chosen from the other end of the
-// list: the newest tag strictly older than this daemon.
-func TestRollbackStepsDownOneRelease(t *testing.T) {
-	h := newHarness()
-	h.src.tags = []string{"v1.12.0", "v1.11.0", "v1.10.1", "nightly", "v1.12.0-rc1"}
-
-	code := h.upgrade(modeRollback, config.Config{})
-
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
-	}
-	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.10.1 --bin-dir /home/user/.local/bin"
-	if got := h.run.commands(); got[0] != want {
-		t.Fatalf("commands = %v, want %s", got, want)
-	}
-}
-
-// A tag newer than this daemon is never chosen by the derivation, which is the
-// rule that stops a stale machine being jumped forward to the oldest release
-// GitHub still lists.
-func TestRollbackRefusesToStepForward(t *testing.T) {
-	h := newHarness()
-	h.src.tags = []string{"v1.12.0", "v" + version.Number}
-
-	code := h.upgrade(modeRollback, config.Config{})
-
-	if code == 0 {
-		t.Fatalf("exit code = 0 with no older release:\n%s", h.out.String())
-	}
-	if h.run.count() != 0 {
-		t.Fatalf("commands = %v, want none", h.run.commands())
-	}
-	if !strings.Contains(h.out.String(), "no release older than v"+version.Number+" is listed") {
-		t.Fatalf("output does not explain the refusal:\n%s", h.out.String())
-	}
-}
-
-// An explicit tag overrides the derivation in both directions, including this
-// one, where it names something newer.
-func TestRollbackObeysAnExplicitTag(t *testing.T) {
-	h := newHarness()
-	h.src.tags = []string{"v1.10.1"}
-
-	code := h.upgrade(modeRollback, config.Config{ReleaseTag: "v1.12.0"})
-
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
-	}
-	if len(h.src.lookups()) != 0 {
-		t.Fatalf("the release host was asked %v, want no lookup", h.src.lookups())
-	}
-	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin"
-	if got := h.run.commands(); got[0] != want {
-		t.Fatalf("commands = %v, want %s", got, want)
-	}
-}
-
-// previousTag is the whole rollback policy, so it is tested directly as well as
-// through the sequence.
-func TestPreviousTag(t *testing.T) {
-	tests := []struct {
-		name    string
-		tags    []string
-		current string
-		want    string
-		found   bool
-	}{
-		{"the newest of several older ones", []string{"v1.12.0", "v1.11.0", "v1.10.1"}, "1.11.0", "v1.10.1", true},
-		{"an older patch is older", []string{"v1.11.0", "v1.10.2"}, "1.11.0", "v1.10.2", true},
-		{"the same release is not older", []string{"v1.11.0"}, "1.11.0", "", false},
-		{"a newer release is not older", []string{"v1.12.0"}, "1.11.0", "", false},
-		{"nothing listed", nil, "1.11.0", "", false},
-		{"unorderable entries are skipped", []string{"nightly", "v1.12.0-rc1"}, "1.11.0", "", false},
-		{"order in the list does not matter", []string{"v1.10.1", "v1.12.0", "v1.10.2"}, "1.11.0", "v1.10.2", true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, found := previousTag(test.tags, test.current)
-			if got != test.want || found != test.found {
-				t.Fatalf("previousTag(%v, %q) = %q, %v; want %q, %v", test.tags, test.current, got, found, test.want, test.found)
-			}
-		})
 	}
 }
 
@@ -881,7 +835,7 @@ func TestUpdateRunsTheInstallerAloneInItsOwnDirectory(t *testing.T) {
 	h.deps.runner = execRunner{}
 	h.deps.lookPath = lookPathWithout("cliamp", "systemctl")
 
-	h.upgrade(modeUpdate, config.Config{ReleaseTag: "v1.12.0"})
+	h.upgrade(config.Config{ReleaseTag: "v1.12.0"})
 
 	body, err := os.ReadFile(evidence)
 	if err != nil {

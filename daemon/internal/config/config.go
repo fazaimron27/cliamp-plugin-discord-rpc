@@ -54,13 +54,10 @@ type Config struct {
 	// ShowUpdate asks the caller to install the newest release, or the tag in
 	// ReleaseTag, and exit instead of running the daemon.
 	ShowUpdate bool
-	// ShowRollback asks the caller to install the newest release older than this
-	// one, or the tag in ReleaseTag, and exit instead of running the daemon.
-	ShowRollback bool
 	// ReleaseTag is the release to install, named on the command line. It is
-	// empty unless one of the two modes above is set, and it is the tag as the
-	// user typed it: normalizing it belongs to whoever installs it. With no
-	// tag, both modes derive one from GitHub instead.
+	// empty unless ShowUpdate is set, and it is the tag as the user typed it:
+	// normalizing it, and refusing one older than the running release, belong to
+	// whoever installs it. With no tag, one is derived from GitHub instead.
 	ReleaseTag string
 
 	ApplicationID string
@@ -159,7 +156,6 @@ func Load(args []string) (Config, error) {
 	flags.BoolVar(&cfg.ShowVersion, "version", false, "print the version and exit")
 	flags.BoolVar(&cfg.ShowCheck, "check", false, "probe the runtime environment, report, and exit")
 	flags.BoolVar(&cfg.ShowUpdate, "update", false, "install the newest release, or tag, and restart the service")
-	flags.BoolVar(&cfg.ShowRollback, "rollback", false, "install the release before this one, or tag, and restart")
 	flags.StringVar(&cfg.ApplicationID, "app-id", os.Getenv("CLIAMP_DISCORD_APP_ID"), "Discord application `ID` (or CLIAMP_DISCORD_APP_ID)")
 	flags.StringVar(&cfg.CliampSocket, "socket", filepath.Join(home, ".config", "cliamp", "cliamp.sock"), "Cliamp IPC socket `path`")
 	flags.StringVar(&cfg.CliampConfig, "config", filepath.Join(home, ".config", "cliamp", "config.toml"), "Cliamp config file `path` containing Discord RPC credentials")
@@ -180,14 +176,11 @@ func Load(args []string) (Config, error) {
 	if len(rest) == 1 {
 		cfg.ReleaseTag = rest[0]
 	}
-	if cfg.ReleaseTag != "" && !cfg.ShowUpdate && !cfg.ShowRollback {
-		return Config{}, fmt.Errorf("release tag %q needs --update or --rollback", cfg.ReleaseTag)
+	if cfg.ReleaseTag != "" && !cfg.ShowUpdate {
+		return Config{}, fmt.Errorf("release tag %q needs --update", cfg.ReleaseTag)
 	}
-	if cfg.ShowUpdate && cfg.ShowRollback {
-		return Config{}, errors.New("--update and --rollback are mutually exclusive")
-	}
-	if (cfg.ShowUpdate || cfg.ShowRollback) && (cfg.ShowCheck || cfg.ShowVersion) {
-		return Config{}, errors.New("--update and --rollback cannot be combined with --check or --version")
+	if cfg.ShowUpdate && (cfg.ShowCheck || cfg.ShowVersion) {
+		return Config{}, errors.New("--update cannot be combined with --check or --version")
 	}
 
 	if cfg.ApplicationID == "" {
