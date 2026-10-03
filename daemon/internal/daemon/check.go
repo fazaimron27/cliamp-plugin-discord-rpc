@@ -191,13 +191,21 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 	return code
 }
 
+// reportWidth and statusWidth are the two columns that make a report a table.
+// They are named because the detail column's position is not private to
+// reportLine: update.go indents a step's continuation lines to meet it.
+const (
+	reportWidth = 9
+	statusWidth = 5
+)
+
 // reportLine writes one probe's line: the probe's name, then its status, then
 // whatever the probe has to say. The two widths are what make the report a
 // table, so every writer of a line goes through here rather than restating the
 // format — there are two of them now, and a report whose columns line up in one
 // section and not the other is worse than either.
 func reportLine(out io.Writer, status, probe, detail string) {
-	fmt.Fprintf(out, "%-9s %-5s %s\n", probe, status, detail)
+	fmt.Fprintf(out, "%-*s %-*s %s\n", reportWidth, probe, statusWidth, status, detail)
 }
 
 // reportRelease prints whether a newer release exists, and does not touch the

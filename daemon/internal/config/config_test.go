@@ -207,7 +207,7 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 
 	help := string(output)
-	for _, option := range []string{"--app-id", "--check", "--config", "--large-image", "--large-text", "--max-age", "--socket", "--transport", "--version"} {
+	for _, option := range []string{"--app-id", "--check", "--config", "--large-image", "--large-text", "--max-age", "--rollback", "--socket", "--transport", "--update", "--version"} {
 		if !strings.Contains(help, option) {
 			t.Errorf("help does not contain %q:\n%s", option, help)
 		}
@@ -220,5 +220,112 @@ func TestConfigHelpUsesDoubleDashOptions(t *testing.T) {
 	}
 	if strings.Contains(help, `(default "false")`) || strings.Contains(help, `(default "true")`) {
 		t.Errorf("help shows a boolean default:\n%s", help)
+	}
+}
+
+// A tag is only meaningful with one of the two modes, so it is refused rather
+// than ignored: a positional argument used to be discarded silently, and a user
+// who typed a version would have had nothing installed and no complaint.
+func TestLoadRejectsATagWithNoMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, args := range [][]string{{"v1.12.0"}, {"--check", "v1.12.0"}, {"--version", "v1.12.0"}} {
+		if _, err := config.Load(args); err == nil {
+			t.Fatalf("Load(%v) accepted a tag with no update mode", args)
+		}
+	}
+}
+
+// Two modes at once, and a mode combined with an answer-and-exit flag, are both
+// contradictory rather than a precedence question.
+func TestLoadRejectsContradictoryModes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, args := range [][]string{
+		{"--update", "--rollback"},
+		{"--update", "--check"},
+		{"--rollback", "--version"},
+	} {
+		if _, err := config.Load(args); err == nil {
+			t.Fatalf("Load(%v) accepted contradictory modes", args)
+		}
+	}
+}
+
+// The modes and their tag reach Config, and the tag keeps the spelling it was
+// given: normalizing it is the update path's business, not the parser's.
+func TestLoadAcceptsTheUpdateModes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
+	t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "")
+	tests := []struct {
+		name   string
+		args   []string
+		update bool
+		roll   bool
+		tag    string
+	}{
+		{"update with no tag", []string{"--update"}, true, false, ""},
+		{"update with a tag", []string{"--update", "v1.12.0"}, true, false, "v1.12.0"},
+		{"update with a bare version", []string{"--update", "1.12.0"}, true, false, "1.12.0"},
+		{"rollback with a tag", []string{"--rollback", "v1.10.1"}, false, true, "v1.10.1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := config.Load(test.args)
+			if err != nil {
+				t.Fatalf("Load(%v): %v", test.args, err)
+			}
+			if cfg.ShowUpdate != test.update {
+				t.Errorf("ShowUpdate = %v, want %v", cfg.ShowUpdate, test.update)
+			}
+			if cfg.ShowRollback != test.roll {
+				t.Errorf("ShowRollback = %v, want %v", cfg.ShowRollback, test.roll)
+			}
+			if cfg.ReleaseTag != test.tag {
+				t.Errorf("ReleaseTag = %q, want %q", cfg.ReleaseTag, test.tag)
+			}
+		})
+	}
+}
+
+// A second positional is a mistake rather than a list, and flag parsing stops at
+// the first positional, so a flag after the tag is a second argument here. The
+// usage text puts the tag last for that reason.
+func TestLoadRejectsASecondPositional(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := config.Load([]string{"--update", "v1.12.0", "--rollback"}); err == nil {
+		t.Fatal("Load accepted two positional arguments")
+	}
+}
+
+// The usage line names the tag, because it is a positional and nothing else says
+// the command takes one.
+//
+// This reads the line through --help rather than by calling the renderer, because
+// this file is the external test package and the renderer is unexported: what a
+// user sees on stderr is the assertion, and it is the stronger one anyway.
+func TestUsageNamesTheTag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStderr := os.Stderr
+	os.Stderr = writer
+	t.Cleanup(func() { os.Stderr = originalStderr })
+
+	_, loadErr := config.Load([]string{"--help"})
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	output, readErr := io.ReadAll(reader)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !errors.Is(loadErr, flag.ErrHelp) {
+		t.Fatalf("error = %v", loadErr)
+	}
+	if !strings.Contains(string(output), "[options] [tag]") {
+		t.Fatalf("usage = %q, want it to name the tag", output)
 	}
 }

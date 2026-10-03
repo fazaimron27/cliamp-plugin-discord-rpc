@@ -213,6 +213,10 @@ func TestVersionWatchStaysQuietForCompatiblePlugins(t *testing.T) {
 // An older plugin line warns, names both versions, and points the user at the
 // plugin update rather than the daemon: when the plugin is the half that is
 // behind, sending the user at the daemon is the wrong direction.
+//
+// The update it names removes the installed copy first, because Cliamp's install
+// refuses a plugin that is already there — and a plugin that reported a version
+// is by definition already installed, so the install alone can only ever fail.
 func TestVersionWatchReportsPluginBehind(t *testing.T) {
 	older := olderLine(t)
 	var watch versionWatch
@@ -222,6 +226,9 @@ func TestVersionWatchReportsPluginBehind(t *testing.T) {
 	}
 	if !strings.Contains(warning, older) || !strings.Contains(warning, version.Number) {
 		t.Fatalf("warning does not name both versions: %q", warning)
+	}
+	if !strings.Contains(warning, "cliamp plugins remove discord-rpc") {
+		t.Fatalf("warning does not tell the user to remove the old plugin first: %q", warning)
 	}
 	if !strings.Contains(warning, "cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v"+version.Number) {
 		t.Fatalf("warning does not tell the user to update the plugin: %q", warning)
