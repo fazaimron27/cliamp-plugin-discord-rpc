@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
-	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -83,15 +82,14 @@ func watchReleases(ctx context.Context, check releaseChecker, interval time.Dura
 // newerReleaseWarning is the sentence both the journal line and the --check report
 // are worded from, so the two cannot describe one release two ways.
 //
-// It names both halves because a release moves both of them: the plugin is
-// installed through Cliamp and the daemon through install.sh, and a user who
-// updates only one is left with a mismatched pairing this project's version check
-// exists to warn about. That is also why it is longer than the sentence
-// versionWatch writes — that one already knows which half is behind, and this one
-// does not.
+// It names the one command that installs both halves. It used to name one command
+// per half, which was two chances to update one of them and be left with the
+// mismatched pairing this project's version check exists to warn about; the flag
+// it names now drives both, and it restarts the daemon the user would otherwise
+// have had to remember to restart themselves.
 func newerReleaseWarning(tag string) string {
 	return fmt.Sprintf(
-		"a newer release exists: %s, and this daemon is v%s. Update both halves with: cliamp plugins install %s@%s, then curl -fsSL %s%s/install.sh | sh; restart the daemon afterwards.",
-		tag, version.Number, release.Repository, tag, release.RawBase, tag,
+		"a newer release exists: %s, and this daemon is v%s. Update both halves with: cliamp-rpcd --update",
+		tag, version.Number,
 	)
 }

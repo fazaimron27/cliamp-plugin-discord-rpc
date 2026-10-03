@@ -17,7 +17,6 @@ import (
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
-	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -222,21 +221,27 @@ func TestWatchReleasesReturnsWhenTheContextIsCancelled(t *testing.T) {
 }
 
 // Both consumers of this sentence — the journal line and the --check report —
-// print it verbatim, so it is asserted here rather than only through them. It
-// names both halves because a release moves both of them, and a user who updates
-// one has the mismatched pairing this project's version check exists to warn
-// about.
-func TestNewerReleaseWarningNamesBothHalves(t *testing.T) {
+// print it verbatim, so it is asserted here rather than only through them.
+//
+// It used to name two commands, one per half. It now names the one command that
+// installs both, and the transition is safe for a reason worth keeping in mind
+// when reading it: the sentence is printed by the running daemon, and a daemon
+// old enough to print the old sentence is a daemon with no --update to name.
+func TestNewerReleaseWarningNamesTheUpdateCommand(t *testing.T) {
 	warning := newerReleaseWarning("v1.12.0")
 
 	for _, want := range []string{
 		"v1.12.0",
 		"v" + version.Number,
-		"cliamp plugins install " + release.Repository + "@v1.12.0",
-		release.RawBase + "v1.12.0/install.sh",
+		"cliamp-rpcd --update",
 	} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning omits %q:\n%s", want, warning)
+		}
+	}
+	for _, unwanted := range []string{"curl", "plugins install"} {
+		if strings.Contains(warning, unwanted) {
+			t.Errorf("warning still names %q:\n%s", unwanted, warning)
 		}
 	}
 }
