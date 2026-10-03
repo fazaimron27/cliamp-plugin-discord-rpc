@@ -403,6 +403,10 @@ func TestUpdateStopsWhenTheInstallerFails(t *testing.T) {
 // the mismatch this project's version check exists to warn about. The plugin is
 // installed before the daemon is restarted, so the restarted daemon never comes
 // up against a half-updated pair.
+//
+// The installed plugin is removed first, and there is no separate trust step:
+// cliamp's install refuses a plugin that is already there, and records the trust
+// itself once the user approves its prompt.
 func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
@@ -414,8 +418,8 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 	}
 	want := []string{
 		"sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin",
+		"cliamp plugins remove discord-rpc",
 		"cliamp plugins install " + release.Repository + "@v1.12.0",
-		"cliamp plugins trust discord-rpc",
 		"systemctl --user try-restart cliamp-rpcd.service",
 	}
 	got := h.run.commands()
@@ -473,13 +477,16 @@ func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
 		t.Fatalf("commands = %v, want the installer alone", got)
 	}
 	for _, want := range []string{
+		"cliamp plugins remove discord-rpc",
 		"cliamp plugins install " + release.Repository + "@v1.12.0",
-		"cliamp plugins trust discord-rpc",
 		"to go back: cliamp-rpcd --rollback",
 	} {
 		if !strings.Contains(h.out.String(), want) {
 			t.Fatalf("output omits %q:\n%s", want, h.out.String())
 		}
+	}
+	if strings.Contains(h.out.String(), "plugins trust") {
+		t.Fatalf("output names a separate trust step:\n%s", h.out.String())
 	}
 }
 
@@ -526,8 +533,7 @@ func TestUpdateStopsAtTheFirstFailedStep(t *testing.T) {
 		omitted string
 	}{
 		{"the installer", 1, 1, "plugin updated"},
-		{"the plugin install", 2, 1, "restarted cliamp-rpcd.service"},
-		{"the trust", 3, 1, "restarted cliamp-rpcd.service"},
+		{"the plugin install", 3, 1, "restarted cliamp-rpcd.service"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -550,18 +556,42 @@ func TestUpdateStopsAtTheFirstFailedStep(t *testing.T) {
 	}
 }
 
-// The two plugin commands are one unit: a trust that fails leaves the plugin
-// installed but not trusted, which the run reports with the command that fixes
-// it rather than as a plain failure.
-func TestUpdateNamesTheTrustCommandWhenTrustingFails(t *testing.T) {
+// A failed plugin install is reported with the command that finishes the job by
+// hand. That command needs no removal of its own: the old copy was taken away
+// before the install was attempted.
+func TestUpdateNamesTheInstallCommandWhenThePluginInstallFails(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
 	h.run.failAt = 3
 
 	h.upgrade(modeUpdate, config.Config{})
 
-	if !strings.Contains(h.out.String(), "cliamp plugins trust discord-rpc") {
-		t.Fatalf("output does not name the trust command:\n%s", h.out.String())
+	want := "Run: cliamp plugins install " + release.Repository + "@v1.12.0"
+	if !strings.Contains(h.out.String(), want) {
+		t.Fatalf("output omits %q:\n%s", want, h.out.String())
+	}
+}
+
+// Removing the old plugin is best effort. Install is the step that has to
+// succeed, and on a machine with no plugin the removal fails for the ordinary
+// reason that there is nothing to remove — which is not a failure of the update.
+func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v1.12.0"
+	h.run.failAt = 2
+
+	code := h.upgrade(modeUpdate, config.Config{})
+
+	if code != 0 {
+		t.Fatalf("exit code = %d after a failed removal, want 0:\n%s", code, h.out.String())
+	}
+	if h.run.count() != 4 {
+		t.Fatalf("commands = %v, want all four", h.run.commands())
+	}
+	for _, line := range []string{"plugin updated to v1.12.0", "restarted cliamp-rpcd.service"} {
+		if !strings.Contains(h.out.String(), line) {
+			t.Fatalf("output omits %q:\n%s", line, h.out.String())
+		}
 	}
 }
 

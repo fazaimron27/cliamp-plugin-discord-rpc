@@ -210,22 +210,32 @@ const restartWarning = "cliamp-rpcd.service was not restarted: run systemctl --u
 // runs: leaving the plugin behind would produce exactly the mismatch the version
 // check warns about, from the command that was supposed to prevent it.
 //
+// The installed plugin is removed first, because Cliamp's install refuses a
+// plugin that is already there and offers no way to overwrite one. That removal
+// is best effort: install is the step that has to succeed, and on a machine with
+// no plugin yet the removal fails for the ordinary reason that there is nothing
+// to remove. It is best effort for a second reason too, which is why a failed
+// install is reported with the install command — the old copy is already gone by
+// then, so that command is a plain re-run rather than one that has to clear the
+// way first.
+//
+// There is no separate trust step. Install records the trust itself once the
+// user approves its prompt, so a trust command after it would ask the user to
+// approve content they have just approved.
+//
 // A missing cliamp is not a failure of this program's own work, but it does leave
 // the pair mismatched, so it is reported with both commands and a false return
 // rather than silently skipped.
 func installPlugin(ctx context.Context, target string, deps upgradeDeps, out io.Writer) bool {
 	if _, err := deps.lookPath("cliamp"); err != nil {
 		fmt.Fprintf(out,
-			"plugin not updated: cliamp is not on PATH. Run: cliamp plugins install %s@%s, then cliamp plugins trust %s\n",
-			release.Repository, tag(target), pluginName)
+			"plugin not updated: cliamp is not on PATH. Run: cliamp plugins remove discord-rpc (harmless if it is not installed), then cliamp plugins install %s@%s\n",
+			release.Repository, tag(target))
 		return false
 	}
+	_ = deps.runner.Run(ctx, "", "cliamp", "plugins", "remove", pluginName)
 	if err := deps.runner.Run(ctx, "", "cliamp", "plugins", "install", release.Repository+"@"+tag(target)); err != nil {
-		fmt.Fprintf(out, "plugin not updated: %v\n", err)
-		return false
-	}
-	if err := deps.runner.Run(ctx, "", "cliamp", "plugins", "trust", pluginName); err != nil {
-		fmt.Fprintf(out, "the plugin was installed but not trusted: %v\nRun: cliamp plugins trust %s\n", err, pluginName)
+		fmt.Fprintf(out, "plugin not updated: %v\nRun: cliamp plugins install %s@%s\n", err, release.Repository, tag(target))
 		return false
 	}
 	fmt.Fprintf(out, "plugin updated to %s\n", tag(target))
