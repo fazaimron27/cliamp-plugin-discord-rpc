@@ -51,6 +51,10 @@ type Config struct {
 	// ShowCheck asks the caller to probe the runtime environment, report, and
 	// exit instead of running the daemon.
 	ShowCheck bool
+	// ReleaseTag is the release tag --update or --rollback was given. It is
+	// empty when neither mode was given one, and the two modes then derive a
+	// tag from GitHub instead.
+	ReleaseTag string
 
 	ApplicationID string
 	CliampSocket  string
