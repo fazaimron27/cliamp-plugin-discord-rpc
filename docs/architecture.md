@@ -156,6 +156,7 @@ cliamp-plugin-discord-rpc/
 │       ├── discord/
 │       ├── playback/
 │       ├── presence/
+│       ├── release/
 │       ├── statewatch/
 │       ├── style/
 │       ├── tracklink/
@@ -185,9 +186,11 @@ cliamp-plugin-discord-rpc/
   configuration, and a daemon running under one warns at startup.
 - `daemon/internal/version` holds the daemon's release identity: the version
   constant the Lua manifest, the release tag and the bundled installer all
-  restate, plus the comparison that words a mismatched plugin/daemon pairing for
-  the daemon's startup warning and for `--check`. The release-identity section
-  above describes that pairing and which half each reader reports on.
+  restate, the user agent every request from this program carries, and the two
+  orderings over a release line — the handshake's, which ignores the patch because
+  a patch cannot change the pub/sub payload, and the release check's, which does
+  not, because a patch release is still something to install. The release-identity
+  section above describes that pairing and which half each reader reports on.
 - `daemon/internal/cliamp` subscribes to retained and live plugin events over
   Cliamp's owner-only Unix socket. It also issues one `state.get` request per
   track over a short-lived connection of its own, for the artwork Cliamp holds
@@ -199,6 +202,10 @@ cliamp-plugin-discord-rpc/
 - `daemon/internal/playback` validates snapshots and derives private identity
   and public presence keys.
 - `daemon/internal/presence` builds typed Discord Listening activities.
+- `daemon/internal/release` asks GitHub which release is the newest. It holds the
+  lookup alone — one request, one tag — and no policy about the answer, because
+  what to do about being behind depends on which half is asking, and only the
+  daemon knows that.
 - `daemon/internal/artwork` merges a track's artwork from the playback path, the
   player and Last.fm, reporting the merge in stages and caching the Last.fm half.
 - `daemon/internal/tracklink` maps a playback path to the public page it belongs

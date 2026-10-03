@@ -17,6 +17,17 @@ import (
 // archives and pins the same line, so bump all of them together.
 const Number = "1.11.0"
 
+// UserAgent is the client string every HTTP request from this program carries.
+// It names the binary and the release it is, so a server operator reading a log
+// can tell which build asked.
+//
+// It lives here with the version constant rather than beside either caller
+// because both of them need the same string and neither owns it: two copies would
+// be one bump away from a daemon that names itself differently in two requests,
+// and the release that made them differ would be exactly the one someone was
+// trying to identify.
+const UserAgent = "cliamp-rpcd/" + Number
+
 // Relation describes how a plugin's release line compares to the daemon's.
 type Relation int
 
