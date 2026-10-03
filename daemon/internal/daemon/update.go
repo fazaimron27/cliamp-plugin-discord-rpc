@@ -13,12 +13,14 @@ package daemon
 // rules have one implementation rather than two that can drift.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
@@ -41,10 +43,11 @@ type releaseSource interface {
 	Script(context.Context, string) ([]byte, error)
 }
 
-// runner runs one child process. The real one is execRunner; the tests replace
-// it, because the commands and their order are the feature.
+// runner runs one child process and hands back everything it wrote. The real one
+// is execRunner; the tests replace it, because the commands and their order are
+// the feature.
 type runner interface {
-	Run(ctx context.Context, dir, name string, args ...string) error
+	Run(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 }
 
 // upgradeDeps is everything the sequence reaches outside itself for, so a test
@@ -168,29 +171,41 @@ func resolveTarget(ctx context.Context, mode upgradeMode, releases releaseSource
 // somewhere nothing sits beside it. The script's absolute path is passed as well
 // as the directory, so the branch it takes depends on where the script is rather
 // than on the child honoring its working directory.
+//
+// The line this reports claims that the attestation and the checksum were
+// verified, which is a statement about install.sh rather than something this
+// program watched happen. It holds because of the two facts above: the empty
+// directory forces the download branch, and that branch runs gh attestation
+// verify and sha256sum -c under `set -eu`, so an exit status of zero is only
+// reachable once both have passed. A release whose install.sh dropped either
+// check would make this line false, which is the one thing to re-read here if
+// that ever changes.
 func installRelease(ctx context.Context, target, binDir string, deps upgradeDeps, out io.Writer) int {
 	script, err := deps.releases.Script(ctx, tag(target))
 	if err != nil {
-		fmt.Fprintf(out, "could not fetch the installer for %s: %v\n", tag(target), err)
+		reportLine(out, "fail", "daemon", fmt.Sprintf("could not fetch the installer for %s: %v", tag(target), err))
 		return 1
 	}
 	dir, err := os.MkdirTemp("", "cliamp-rpc-update.")
 	if err != nil {
-		fmt.Fprintf(out, "could not create a working directory: %v\n", err)
+		reportLine(out, "fail", "daemon", fmt.Sprintf("could not create a working directory: %v", err))
 		return 1
 	}
 	defer os.RemoveAll(dir)
 
 	path := filepath.Join(dir, "install.sh")
 	if err := os.WriteFile(path, script, 0o600); err != nil {
-		fmt.Fprintf(out, "could not write the installer: %v\n", err)
+		reportLine(out, "fail", "daemon", fmt.Sprintf("could not write the installer: %v", err))
 		return 1
 	}
-	if err := deps.runner.Run(ctx, dir, "sh", path, "--version", tag(target), "--bin-dir", binDir); err != nil {
-		fmt.Fprintf(out, "the installer failed: %v\n", err)
+	output, err := deps.runner.Run(ctx, dir, "sh", path, "--version", tag(target), "--bin-dir", binDir)
+	if err != nil {
+		replay(out, output)
+		reportLine(out, "fail", "daemon", fmt.Sprintf("the installer failed: %v", err))
 		return 1
 	}
-	fmt.Fprintf(out, "updated cliamp-rpcd v%s -> %s\n", version.Number, tag(target))
+	reportLine(out, "ok", "daemon",
+		fmt.Sprintf("v%s -> %s, attestation and checksum verified", version.Number, tag(target)))
 	return 0
 }
 
@@ -232,18 +247,74 @@ const restartWarning = "cliamp-rpcd.service was not restarted: run systemctl --u
 // rather than silently skipped.
 func installPlugin(ctx context.Context, target string, deps upgradeDeps, out io.Writer) bool {
 	if _, err := deps.lookPath("cliamp"); err != nil {
+		reportLine(out, "fail", "plugin", "cliamp is not on PATH")
 		fmt.Fprintf(out,
-			"plugin not updated: cliamp is not on PATH. Run: cliamp plugins remove discord-rpc (harmless if it is not installed), then cliamp plugins install %s@%s\n",
+			"Run: cliamp plugins remove discord-rpc (harmless if it is not installed), then cliamp plugins install %s@%s\n",
 			release.Repository, tag(target))
 		return false
 	}
-	_ = deps.runner.Run(ctx, "", "cliamp", "plugins", "remove", pluginName)
-	if err := deps.runner.Run(ctx, "", "cliamp", "plugins", "install", release.Repository+"@"+tag(target), "--yes"); err != nil {
-		fmt.Fprintf(out, "plugin not updated: %v\nRun: cliamp plugins install %s@%s\n", err, release.Repository, tag(target))
+	_, _ = deps.runner.Run(ctx, "", "cliamp", "plugins", "remove", pluginName)
+	output, err := deps.runner.Run(ctx, "", "cliamp", "plugins", "install", release.Repository+"@"+tag(target), "--yes")
+	if err != nil {
+		replay(out, output)
+		reportLine(out, "fail", "plugin", fmt.Sprintf("the install failed: %v", err))
+		fmt.Fprintf(out, "Run: cliamp plugins install %s@%s\n", release.Repository, tag(target))
 		return false
 	}
-	fmt.Fprintf(out, "plugin updated to %s\n", tag(target))
+	reportLine(out, "ok", "plugin", "installed "+tag(target))
+	reportTrust(out, output)
 	return true
+}
+
+// trustFacts are what Cliamp says about a plugin it installs, in the order it
+// says them, paired with the name this program reports each one under.
+var trustFacts = []struct {
+	name   string
+	prefix string
+}{
+	{"source", "Source: "},
+	{"sha256", "SHA-256: "},
+	{"permissions", "Declared permissions: "},
+	{"access", "Implicit access: "},
+}
+
+// trustIndent puts a step's continuation lines in the same column reportLine puts
+// a step's own detail in.
+const trustIndent = reportWidth + 1 + statusWidth + 1
+
+// reportTrust prints what Cliamp recorded about the plugin, one fact per line,
+// indented under the step that recorded it.
+//
+// They are read back out of the install's own output rather than fetched again,
+// because Cliamp is what computed the hash and read the declared permissions. A
+// fact whose line is not in the output is left out rather than guessed at, so a
+// Cliamp that words its report differently costs the line and not the update.
+func reportTrust(out io.Writer, output []byte) {
+	for _, fact := range trustFacts {
+		for _, line := range strings.Split(string(output), "\n") {
+			if !strings.HasPrefix(line, fact.prefix) {
+				continue
+			}
+			fmt.Fprintf(out, "%*s%-12s %s\n",
+				trustIndent, "", fact.name, strings.TrimSpace(line[len(fact.prefix):]))
+			break
+		}
+	}
+}
+
+// replay writes a failed command's own output.
+//
+// Capturing a child's output is what makes a quiet success possible, and it must
+// not make a failure quiet as well: when a step fails, the diagnosis is what the
+// command said rather than this program's summary of it.
+func replay(out io.Writer, output []byte) {
+	if len(output) == 0 {
+		return
+	}
+	out.Write(output)
+	if output[len(output)-1] != '\n' {
+		fmt.Fprintln(out)
+	}
 }
 
 // restart restarts a running daemon and says nothing about a stopped one.
@@ -256,14 +327,16 @@ func installPlugin(ctx context.Context, target string, deps upgradeDeps, out io.
 // and because a machine without systemd is doing nothing wrong.
 func restart(ctx context.Context, deps upgradeDeps, out io.Writer) {
 	if _, err := deps.lookPath("systemctl"); err != nil {
-		fmt.Fprintf(out, "%s\n", restartWarning)
+		reportLine(out, "warn", "service", restartWarning)
 		return
 	}
-	if err := deps.runner.Run(ctx, "", "systemctl", "--user", "try-restart", serviceName); err != nil {
-		fmt.Fprintf(out, "%s\n", restartWarning)
+	output, err := deps.runner.Run(ctx, "", "systemctl", "--user", "try-restart", serviceName)
+	if err != nil {
+		replay(out, output)
+		reportLine(out, "warn", "service", restartWarning)
 		return
 	}
-	fmt.Fprintf(out, "restarted %s\n", serviceName)
+	reportLine(out, "ok", "service", "restarted "+serviceName)
 }
 
 // upgrade is both commands: the tag is chosen differently for each and nothing
@@ -322,24 +395,43 @@ func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgr
 	return 0
 }
 
-// execRunner runs a child with its output on the same terminal the report uses,
-// and its input inherited so a prompt behaves as it would by hand.
+// execRunner runs a child with its output captured rather than shown.
+//
+// Nothing a child prints reaches the terminal on its own. The download progress
+// meters, the attestation dump, and the installer's own advice for a first-time
+// install are all noise around a command whose answer is one line, and no flag
+// turns them off: install.sh offers only --version, --bin-dir, and --service-dir,
+// and gh's attestation verify offers none. So the update reports in its own words
+// and replays a child's output only when that child failed, where it is the
+// diagnosis rather than the noise.
+//
+// Stdin is deliberately empty. Inheriting the terminal is what would let a prompt
+// be answered by hand, but with the output captured that prompt would be invisible
+// and the run would hang on it — gh asking for a login is the case that happens.
+// An empty stdin turns the same situation into a failure that can be read.
 //
 // An empty dir leaves the child in this process's working directory, which is
 // what the plugin and restart steps want: they are the user's own commands and
 // should see the user's own directory.
-type execRunner struct {
-	out io.Writer
-}
+type execRunner struct{}
 
-// Run runs one command, returning its failure as the error.
-func (r execRunner) Run(ctx context.Context, dir, name string, args ...string) error {
+// Run runs one command, returning what it wrote and its failure as the error.
+//
+// The same buffer takes both streams, which exec notices and serves with a single
+// pipe, so the output arrives in the order the child wrote it rather than in two
+// blocks to be interleaved afterwards.
+//
+// Running before reading is not a style choice: a return statement evaluates its
+// operands left to right, so `output.Bytes(), command.Run()` reads the buffer
+// before the child has written to it and hands back nothing at all.
+func (r execRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
-	command.Stdout = r.out
-	command.Stderr = r.out
-	command.Stdin = os.Stdin
-	return command.Run()
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	err := command.Run()
+	return output.Bytes(), err
 }
 
 // executablePath is the running binary's own path, which is where a release
@@ -358,9 +450,13 @@ func executablePath() string {
 
 // newUpgradeDeps is the production wiring, shared by both commands so they cannot
 // reach outside themselves differently.
-func newUpgradeDeps(out io.Writer) upgradeDeps {
+//
+// It takes no writer now that the runner captures: a child's output goes to the
+// report only through the step that ran it, which is what keeps a failure's
+// diagnosis from arriving before the step that failed.
+func newUpgradeDeps() upgradeDeps {
 	return upgradeDeps{
-		runner:   execRunner{out: out},
+		runner:   execRunner{},
 		lookPath: exec.LookPath,
 		releases: release.New(),
 		binary:   executablePath(),
@@ -377,7 +473,7 @@ func newUpgradeDeps(out io.Writer) upgradeDeps {
 // is what makes the daemon unable to write the files it reads, and that is a
 // property worth keeping.
 func Update(ctx context.Context, cfg config.Config) int {
-	return upgrade(ctx, cfg, modeUpdate, newUpgradeDeps(os.Stdout), os.Stdout)
+	return upgrade(ctx, cfg, modeUpdate, newUpgradeDeps(), os.Stdout)
 }
 
 // Rollback installs the newest release strictly older than this daemon, or the
@@ -387,5 +483,5 @@ func Update(ctx context.Context, cfg config.Config) int {
 // to is derived from GitHub's list each time, so nothing about the previous
 // version is stored on this machine and uninstall.sh has nothing new to clean up.
 func Rollback(ctx context.Context, cfg config.Config) int {
-	return upgrade(ctx, cfg, modeRollback, newUpgradeDeps(os.Stdout), os.Stdout)
+	return upgrade(ctx, cfg, modeRollback, newUpgradeDeps(), os.Stdout)
 }

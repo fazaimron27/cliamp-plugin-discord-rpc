@@ -32,23 +32,26 @@ type recorded struct {
 }
 
 // recorder is the runner these tests drive: it records every command in the order
-// it was asked for one, and answers with an error at the call a test names.
+// it was asked for one, answers with an error at the call a test names, and hands
+// back whatever output the test put in it.
 type recorder struct {
 	mu       sync.Mutex
 	calls    []recorded
+	output   []byte
 	failAt   int
 	failWith error
 }
 
-// Run records the command and fails when it is the one a test named.
-func (r *recorder) Run(ctx context.Context, dir, name string, args ...string) error {
+// Run records the command, answers with the output the test set, and fails when
+// it is the call a test named.
+func (r *recorder) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, recorded{dir: dir, name: name, args: args})
 	if r.failAt > 0 && len(r.calls) == r.failAt {
-		return r.failWith
+		return r.output, r.failWith
 	}
-	return nil
+	return r.output, nil
 }
 
 // commands renders each recorded call as one string, so a test can compare the
@@ -182,6 +185,153 @@ func (h *harness) setBinDir(dir string) {
 	h.deps.binDir = dir
 }
 
+// lineFor returns the first line of output whose first field is the named one, so
+// a test can ask what a step reported without restating the column widths, which
+// belong to reportLine and to nothing else.
+func lineFor(output, first string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == first {
+			return line, true
+		}
+	}
+	return "", false
+}
+
+// One line per step, in the shape --check already uses: the step, then its
+// outcome, then what it did. Nothing else — a run of this command has to be
+// readable enough to be read.
+func TestUpdateReportsEachStepOnOneLine(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v1.12.0"
+
+	if code := h.upgrade(modeUpdate, config.Config{}); code != 0 {
+		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
+	}
+	for _, want := range []struct {
+		step   string
+		detail string
+	}{
+		{"daemon", "v" + version.Number + " -> v1.12.0, attestation and checksum verified"},
+		{"plugin", "installed v1.12.0"},
+		{"service", "restarted cliamp-rpcd.service"},
+	} {
+		line, ok := lineFor(h.out.String(), want.step)
+		if !ok {
+			t.Fatalf("the report has no %s line:\n%s", want.step, h.out.String())
+		}
+		if !strings.Contains(line, want.detail) {
+			t.Fatalf("%s line = %q, want it to say %q", want.step, line, want.detail)
+		}
+	}
+}
+
+// cliampInstallOutput is what the real `cliamp plugins install` prints, taken
+// from pluginmgr's own format strings.
+const cliampInstallOutput = `Trying https://github.com/fazaimron27/cliamp-plugin-discord-rpc...
+Source: https://github.com/fazaimron27/cliamp-plugin-discord-rpc@v1.12.0
+SHA-256: 9944bf32a0d5f1c0f2a13c3f0f4a2a2a1f0e9d8c7b6a59483726150413243546
+Declared permissions: none
+Implicit access: unrestricted reads; allowlisted writes; public HTTP
+Installed discord-rpc → /home/user/.config/cliamp/plugins/discord-rpc
+`
+
+// The install carries --yes, so the approval is taken as given and the trust
+// Cliamp recorded is the only record of what was approved. It is kept rather than
+// dropped, one fact per line, under the step that recorded it.
+//
+// Each fact is indented to the column where the step's own detail begins, which is
+// read off the step's line rather than restated here so that the two cannot drift.
+func TestUpdateKeepsTheTrustCliampRecorded(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v1.12.0"
+	h.run.output = []byte(cliampInstallOutput)
+
+	if code := h.upgrade(modeUpdate, config.Config{}); code != 0 {
+		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
+	}
+	step, ok := lineFor(h.out.String(), "plugin")
+	if !ok {
+		t.Fatalf("the report has no plugin line:\n%s", h.out.String())
+	}
+	column := strings.Index(step, "installed v1.12.0")
+	if column < 0 {
+		t.Fatalf("the plugin line does not report the install: %q", step)
+	}
+	for _, want := range []struct {
+		fact  string
+		value string
+	}{
+		{"source", "https://github.com/fazaimron27/cliamp-plugin-discord-rpc@v1.12.0"},
+		{"sha256", "9944bf32a0d5f1c0f2a13c3f0f4a2a2a1f0e9d8c7b6a59483726150413243546"},
+		{"permissions", "none"},
+		{"access", "unrestricted reads; allowlisted writes; public HTTP"},
+	} {
+		line, ok := lineFor(h.out.String(), want.fact)
+		if !ok {
+			t.Fatalf("the report omits %s:\n%s", want.fact, h.out.String())
+		}
+		if !strings.HasPrefix(line, strings.Repeat(" ", column)) {
+			t.Fatalf("%s line = %q, want it indented to column %d under the step", want.fact, line, column)
+		}
+		if !strings.Contains(line, want.value) {
+			t.Fatalf("%s line = %q, want it to say %q", want.fact, line, want.value)
+		}
+	}
+}
+
+// A child that fails is replayed in its own words. Capturing is what makes a
+// quiet success possible; it must not make a failure quiet as well.
+func TestUpdateReplaysTheOutputOfAFailedCommand(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v1.12.0"
+	h.run.output = []byte("curl: (7) Failed to connect to github.com port 443\n")
+	h.run.failAt = 1
+
+	if code := h.upgrade(modeUpdate, config.Config{}); code == 0 {
+		t.Fatalf("exit code = 0 after a failed install:\n%s", h.out.String())
+	}
+	if !strings.Contains(h.out.String(), "curl: (7) Failed to connect to github.com port 443") {
+		t.Fatalf("the failure was not reported in the command's own words:\n%s", h.out.String())
+	}
+	line, ok := lineFor(h.out.String(), "daemon")
+	if !ok || !strings.Contains(line, "fail") {
+		t.Fatalf("the failed step has no failing line:\n%s", h.out.String())
+	}
+}
+
+// A child is free to stop mid-line — curl's progress meter ends without a
+// newline — so a replay that just appended the bytes would leave this program's
+// next line glued to the end of the command's last one.
+func TestUpdateKeepsAReplayedFailureOnItsOwnLine(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v1.12.0"
+	h.run.output = []byte("  % Total    % Received % Xferd")
+	h.run.failAt = 1
+
+	if code := h.upgrade(modeUpdate, config.Config{}); code == 0 {
+		t.Fatalf("exit code = 0 after a failed install:\n%s", h.out.String())
+	}
+	if !strings.Contains(h.out.String(), "Xferd\n") {
+		t.Fatalf("the replayed output was not closed off before the next line:\n%s", h.out.String())
+	}
+}
+
+// A child that succeeds has its output dropped. That is the point of capturing:
+// the two progress meters, the attestation dump, and the installer's advice for a
+// first-time install are noise around an answer that is one line.
+func TestUpdateDropsTheOutputOfASuccessfulCommand(t *testing.T) {
+	h := newHarness()
+	h.src.latest = "v1.12.0"
+	h.run.output = []byte("  % Total    % Received % Xferd  Average Speed   Time\n100   5568  100   5568    0     0  12687      0\n")
+
+	if code := h.upgrade(modeUpdate, config.Config{}); code != 0 {
+		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
+	}
+	if strings.Contains(h.out.String(), "Xferd") {
+		t.Fatalf("a successful command's output reached the report:\n%s", h.out.String())
+	}
+}
+
 // The installer runs in a directory holding the script and nothing else, with the
 // tag and the bin directory named on its command line. That directory is the
 // whole design: install.sh installs what sits beside it without verifying
@@ -206,7 +356,7 @@ func TestUpdateInstallsTheDaemonHalf(t *testing.T) {
 	if !strings.Contains(h.out.String(), "installing v1.12.0 into /home/user/.local/bin") {
 		t.Fatalf("output does not name the directory it is installing into:\n%s", h.out.String())
 	}
-	if !strings.Contains(h.out.String(), "updated cliamp-rpcd v"+version.Number+" -> v1.12.0") {
+	if !strings.Contains(h.out.String(), "v"+version.Number+" -> v1.12.0, attestation and checksum verified") {
 		t.Fatalf("output omits the update:\n%s", h.out.String())
 	}
 }
@@ -394,8 +544,8 @@ func TestUpdateStopsWhenTheInstallerFails(t *testing.T) {
 	if h.run.count() != 1 {
 		t.Fatalf("commands = %v, want the installer alone", h.run.commands())
 	}
-	if strings.Contains(h.out.String(), "updated cliamp-rpcd") {
-		t.Fatalf("a failed install was reported as an update:\n%s", h.out.String())
+	if line, ok := lineFor(h.out.String(), "daemon"); ok && strings.Contains(line, "ok") {
+		t.Fatalf("a failed install was reported as an update: %q", line)
 	}
 }
 
@@ -432,8 +582,8 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 		}
 	}
 	for _, line := range []string{
-		"updated cliamp-rpcd v" + version.Number + " -> v1.12.0",
-		"plugin updated to v1.12.0",
+		"v" + version.Number + " -> v1.12.0, attestation and checksum verified",
+		"installed v1.12.0",
 		"restarted cliamp-rpcd.service",
 		"to go back: cliamp-rpcd --rollback",
 	} {
@@ -532,7 +682,7 @@ func TestUpdateStopsAtTheFirstFailedStep(t *testing.T) {
 		want    int
 		omitted string
 	}{
-		{"the installer", 1, 1, "plugin updated"},
+		{"the installer", 1, 1, "installed v1.12.0"},
 		{"the plugin install", 3, 1, "restarted cliamp-rpcd.service"},
 	}
 	for _, test := range tests {
@@ -588,7 +738,7 @@ func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
 	if h.run.count() != 4 {
 		t.Fatalf("commands = %v, want all four", h.run.commands())
 	}
-	for _, line := range []string{"plugin updated to v1.12.0", "restarted cliamp-rpcd.service"} {
+	for _, line := range []string{"installed v1.12.0", "restarted cliamp-rpcd.service"} {
 		if !strings.Contains(h.out.String(), line) {
 			t.Fatalf("output omits %q:\n%s", line, h.out.String())
 		}
@@ -728,7 +878,7 @@ func TestUpdateRunsTheInstallerAloneInItsOwnDirectory(t *testing.T) {
 
 	h := newHarness()
 	h.deps.releases = release.New(release.WithRawURL(server.URL))
-	h.deps.runner = execRunner{out: &h.out}
+	h.deps.runner = execRunner{}
 	h.deps.lookPath = lookPathWithout("cliamp", "systemctl")
 
 	h.upgrade(modeUpdate, config.Config{ReleaseTag: "v1.12.0"})
@@ -756,13 +906,30 @@ func TestUpdateRunsTheInstallerAloneInItsOwnDirectory(t *testing.T) {
 	}
 }
 
+// The other claim a fake runner cannot make: that the real one hands back what
+// the child wrote. Every other test in this file replaces the runner, so nothing
+// else here exercises the capture at all — and a capture that returned an empty
+// slice would leave all of them passing while the update went silent.
+func TestExecRunnerHandsBackWhatTheChildWrote(t *testing.T) {
+	ctx := context.Background()
+
+	output, err := execRunner{}.Run(ctx, "", "sh", "-c", "printf out; printf err >&2")
+
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := string(output); got != "outerr" {
+		t.Fatalf("captured %q, want both streams in the order the child wrote them", got)
+	}
+}
+
 // A child must die with the context rather than outliving the terminal that
 // started it, which is what Ctrl-C during an update is.
 func TestExecRunnerRefusesACancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := execRunner{out: io.Discard}.Run(ctx, "", "sh", "-c", "true")
+	_, err := execRunner{}.Run(ctx, "", "sh", "-c", "true")
 	if err == nil {
 		t.Fatal("a cancelled context started a child process")
 	}
