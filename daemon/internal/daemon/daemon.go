@@ -14,6 +14,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/tracklink"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
@@ -27,6 +28,13 @@ const presenceRefresh = 15 * time.Second
 //
 // The line it logs at startup names the source it is about to read, which is the
 // first thing to check when nothing shows up on Discord.
+//
+// It also starts the release check, which is the one thing this process logs that
+// is not about the environment it found: it reports a newer release once per
+// distinct tag, and says nothing at all while this one is current. That check runs
+// on a goroutine of its own rather than in the loop, because it asks about the
+// release and not about the track, and a GitHub that is slow or absent must not be
+// able to delay a presence update.
 //
 // It takes the writer rather than a Logger because it is where the components
 // are named. Each logger is built here with the name its lines will carry into
@@ -46,6 +54,7 @@ func Run(ctx context.Context, cfg config.Config, w io.Writer) error {
 	if cfg.LastFMAPIKey == "" {
 		logger.Printf("Last.fm artwork disabled: plugins.discord-rpc.lastfm_api_key is empty")
 	}
+	go watchReleases(ctx, release.New(), releaseInterval, logger)
 	return run(
 		ctx, cfg,
 		discord.NewClient(cfg.ApplicationID, diag.New(w, "discord")),
