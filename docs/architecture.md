@@ -202,10 +202,11 @@ cliamp-plugin-discord-rpc/
 - `daemon/internal/playback` validates snapshots and derives private identity
   and public presence keys.
 - `daemon/internal/presence` builds typed Discord Listening activities.
-- `daemon/internal/release` asks GitHub which release is the newest. It holds the
-  lookup alone — one request, one tag — and no policy about the answer, because
-  what to do about being behind depends on which half is asking, and only the
-  daemon knows that.
+- `daemon/internal/release` is the project's release identity and everything read
+  from it: the repository and the raw host, the newest-release lookup, the feed of
+  released tags, and a release's own published installer. It holds no policy about
+  the answer, because what to do about being behind depends on which half is
+  asking, and only the daemon knows that.
 - `daemon/internal/artwork` merges a track's artwork from the playback path, the
   player and Last.fm, reporting the merge in stages and caching the Last.fm half.
 - `daemon/internal/tracklink` maps a playback path to the public page it belongs
@@ -218,7 +219,9 @@ cliamp-plugin-discord-rpc/
   reconnects, refreshes, activity clearing, and the check for a newer release,
   which runs beside the loop rather than in it so a slow GitHub cannot delay a
   presence update. It also owns the `--check` diagnostic, which probes the same
-  transports in isolation and reports them without starting the run loop.
+  transports in isolation and reports them without starting the run loop, and the
+  `--update` and `--rollback` commands, which install a release by running that
+  release's own installer rather than by carrying one of their own.
 - `daemon/internal/style` holds this repository's comment convention, the one
   written for contributors in `docs/comments.md`. It has no API on purpose: a
   convention belongs to no single package, so this one exists to give the guard
