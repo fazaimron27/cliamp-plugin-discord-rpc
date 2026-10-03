@@ -266,6 +266,11 @@ func restart(ctx context.Context, deps upgradeDeps, out io.Writer) {
 // the plugin step runs, so a failed plugin would leave a new daemon to be started
 // against the plugin it no longer matches, which is the state this command
 // exists to avoid.
+//
+// The way back is named whenever the daemon half reached disk, including when the
+// plugin step then failed. That is the case most likely to want it: the user is
+// left with a replaced binary and an un-updated plugin, and no other line of the
+// report mentions that a release before this one can be installed.
 func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgradeDeps, out io.Writer) int {
 	target, ok := explicitTag(cfg.ReleaseTag, out)
 	if !ok {
@@ -292,11 +297,14 @@ func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgr
 	if code := installRelease(ctx, target, binDir, deps, out); code != 0 {
 		return code
 	}
-	if !installPlugin(ctx, target, deps, out) {
+	pluginInstalled := installPlugin(ctx, target, deps, out)
+	if pluginInstalled {
+		restart(ctx, deps, out)
+	}
+	fmt.Fprintf(out, "to go back: cliamp-rpcd --rollback\n")
+	if !pluginInstalled {
 		return 1
 	}
-	restart(ctx, deps, out)
-	fmt.Fprintf(out, "to go back: cliamp-rpcd --rollback\n")
 	return 0
 }
 

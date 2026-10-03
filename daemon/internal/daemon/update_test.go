@@ -457,7 +457,8 @@ func TestUpdateUsesTryRestart(t *testing.T) {
 // A missing cliamp leaves the daemon half installed and the pair mismatched, so
 // the run is not a success: it names both commands for the user to run, and it
 // stops before the restart rather than bringing the new daemon up against the
-// plugin it no longer matches.
+// plugin it no longer matches. It still names the way back, because the half it
+// did install is the half the user might want undone.
 func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
 	h := newHarness()
 	h.src.latest = "v1.12.0"
@@ -474,6 +475,7 @@ func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
 	for _, want := range []string{
 		"cliamp plugins install " + release.Repository + "@v1.12.0",
 		"cliamp plugins trust discord-rpc",
+		"to go back: cliamp-rpcd --rollback",
 	} {
 		if !strings.Contains(h.out.String(), want) {
 			t.Fatalf("output omits %q:\n%s", want, h.out.String())
