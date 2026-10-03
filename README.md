@@ -177,6 +177,14 @@ reference:
 Only the major and minor components are compared, so a patch difference stays
 silent. A plugin old enough to omit its version is not warned about at all.
 
+Separately from that comparison, the daemon asks GitHub once a day whether a newer
+release of this project exists, and logs a line the first time it sees one. That
+line compares all three components, so a patch release is reported there even
+though the mismatch warning stays quiet about it, and it names the commands that
+update both halves. A machine that is offline logs the failed check once and then
+stays quiet until it can reach GitHub again. `--check` reports the same answer as
+its last line, and never fails because of it.
+
 ### Optional systemd user service
 
 The installer leaves the unit installed, disabled, and stopped. To run the
@@ -374,10 +382,12 @@ gate a start:
 cliamp-rpcd --check && systemctl --user start cliamp-rpcd.service
 ```
 
-Artwork and plugin-version lines report `warn` without failing the command,
-because the daemon runs without artwork and treats version skew as a warning
-rather than an error. It makes exactly one connection to each half and never
-publishes an activity, so running it does not disturb your Discord presence.
+Artwork, plugin-version, and `release` lines report `warn` without failing the
+command: the daemon runs without artwork, treats version skew as a warning rather
+than an error, and treats both a newer release and a GitHub it could not reach as
+things to know rather than things broken. It makes exactly one connection to each
+half, plus one request to GitHub for the `release` line, and never publishes an
+activity, so running it does not disturb your Discord presence.
 
 The `transport` line is the one to read first when nothing appears: it names the
 transport in use and where that value came from. A `warn` there means the daemon

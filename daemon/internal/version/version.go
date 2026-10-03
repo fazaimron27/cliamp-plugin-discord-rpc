@@ -17,6 +17,17 @@ import (
 // archives and pins the same line, so bump all of them together.
 const Number = "1.11.0"
 
+// UserAgent is the client string every HTTP request from this program carries.
+// It names the binary and the release it is, so a server operator reading a log
+// can tell which build asked.
+//
+// It lives here with the version constant rather than beside either caller
+// because both of them need the same string and neither owns it: two copies would
+// be one bump away from a daemon that names itself differently in two requests,
+// and the release that made them differ would be exactly the one someone was
+// trying to identify.
+const UserAgent = "cliamp-rpcd/" + Number
+
 // Relation describes how a plugin's release line compares to the daemon's.
 type Relation int
 
@@ -139,4 +150,73 @@ func releaseLine(value string) (int, int, bool) {
 		return 0, 0, false
 	}
 	return major, minor, true
+}
+
+// releaseNumber parses a dotted version into all three numeric components,
+// reporting false when a component is missing, non-numeric, or one too many to
+// be a release line: four components name something this project does not
+// publish.
+//
+// It sits beside releaseLine rather than replacing it because the two have
+// different right answers for one input. releaseLine reads the first two
+// components and ignores whatever follows, which is what keeps the handshake
+// quiet about a build reporting "1.11.0-dev": that is the same release line, and
+// warning about it would be a false mismatch. An ordering cannot be that lenient,
+// because a suffix is not evidence of a newer release and reading it as one would
+// send a user to a download that may not exist, so this refuses instead.
+func releaseNumber(value string) (int, int, int, bool) {
+	fields := strings.Split(Normalize(value), ".")
+	if len(fields) < 2 || len(fields) > 3 {
+		return 0, 0, 0, false
+	}
+	var numbers [3]int
+	for index, field := range fields {
+		number, err := strconv.Atoi(field)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		numbers[index] = number
+	}
+	return numbers[0], numbers[1], numbers[2], true
+}
+
+// IsVersion reports whether value names a release line this package can order:
+// two or three dot-separated numeric components, with a leading "v" and
+// surrounding space tolerated as everywhere else here.
+//
+// It is exported because the release checker has to tell a tag it cannot read
+// from a tag that is merely not newer, and the alternative is a second copy of
+// this rule somewhere else that could drift from the comparison's.
+func IsVersion(value string) bool {
+	_, _, _, ok := releaseNumber(value)
+	return ok
+}
+
+// Newer reports whether candidate is a later release than current, comparing all
+// three components. A missing component counts as zero, so "1.12" and "1.12.0"
+// name one release.
+//
+// Relate deliberately ignores the patch component, because a patch difference
+// cannot change the pub/sub payload. This deliberately does not, because a patch
+// release is still something to install. Folding the two together would either
+// make every patch bump look like a handshake mismatch or make every patch
+// release invisible, and the second is the quieter failure: v1.10.1 shipped and
+// nothing in this package would have mentioned it.
+//
+// A side that does not parse reports false rather than true. An unreadable value
+// is not evidence of a newer release, and guessing would send a user to download
+// something that may not exist.
+func Newer(current, candidate string) bool {
+	currentMajor, currentMinor, currentPatch, currentOK := releaseNumber(current)
+	candidateMajor, candidateMinor, candidatePatch, candidateOK := releaseNumber(candidate)
+	if !currentOK || !candidateOK {
+		return false
+	}
+	if candidateMajor != currentMajor {
+		return candidateMajor > currentMajor
+	}
+	if candidateMinor != currentMinor {
+		return candidateMinor > currentMinor
+	}
+	return candidatePatch > currentPatch
 }

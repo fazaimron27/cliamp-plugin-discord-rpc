@@ -22,8 +22,6 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
-const userAgent = "cliamp-rpcd/" + version.Number
-
 const (
 	maxResponseSize = 1 << 20
 	// failureRetry is how long "no artwork yet" stands before the track is asked
@@ -239,7 +237,7 @@ func (r *LastFM) get(ctx context.Context, query url.Values) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("build Last.fm request")
 	}
-	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("User-Agent", version.UserAgent)
 	response, err := r.client.Do(request)
 	if err != nil {
 		return nil, errors.New("Last.fm request failed")
