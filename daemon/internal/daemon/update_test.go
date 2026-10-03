@@ -425,7 +425,7 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 	want := []string{
 		"sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin",
 		"cliamp plugins remove discord-rpc",
-		"cliamp plugins install " + release.Repository + "@v1.12.0",
+		"cliamp plugins install " + release.Repository + "@v1.12.0 --yes",
 		"systemctl --user try-restart cliamp-rpcd.service",
 	}
 	got := h.run.commands()
@@ -601,9 +601,28 @@ func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
 	}
 }
 
+// On Linux (or any platform where IsTrusted returns true), the install
+// needs --yes to auto-trust without prompting, since the user has already
+// approved the plugin on first install via install.sh.
+func TestUpdateInstallsThePluginWithYesFlagWhenTrusted(t *testing.T) {
+	h := newHarness()
+	h.deps.isTrusted = func() bool { return true }
+	h.src.latest = "v1.12.0"
+
+	code := h.upgrade(modeUpdate, config.Config{})
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
+	}
+	want := "cliamp plugins install " + release.Repository + "@v1.12.0 --yes"
+	if got := h.run.commands()[2]; got != want {
+		t.Fatalf("command 3 = %q, want %q", got, want)
+	}
+}
+
 // On non-Linux (or any platform where IsTrusted returns false), the install
-// needs --yes for unattended updates.
-func TestUpdateInstallsThePluginWithYesFlagWhenNotTrusted(t *testing.T) {
+// prompts the user for trust, so --yes is not added.
+func TestUpdateInstallsThePluginWithoutYesFlagWhenNotTrusted(t *testing.T) {
 	h := newHarness()
 	h.deps.isTrusted = func() bool { return false }
 	h.src.latest = "v1.12.0"
@@ -613,7 +632,7 @@ func TestUpdateInstallsThePluginWithYesFlagWhenNotTrusted(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
 	}
-	want := "cliamp plugins install " + release.Repository + "@v1.12.0 --yes"
+	want := "cliamp plugins install " + release.Repository + "@v1.12.0"
 	if got := h.run.commands()[2]; got != want {
 		t.Fatalf("command 3 = %q, want %q", got, want)
 	}

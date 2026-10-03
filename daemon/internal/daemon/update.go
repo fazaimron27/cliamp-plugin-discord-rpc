@@ -236,7 +236,7 @@ func installPlugin(ctx context.Context, target string, deps upgradeDeps, out io.
 	}
 	_ = deps.runner.Run(ctx, "", "cliamp", "plugins", "remove", pluginName)
 	args := []string{"plugins", "install", release.Repository + "@" + tag(target)}
-	if !deps.isTrusted() {
+	if deps.isTrusted() {
 		args = append(args, "--yes")
 	}
 	if err := deps.runner.Run(ctx, "", "cliamp", args...); err != nil {
