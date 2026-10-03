@@ -7,6 +7,7 @@ package release
 // daemon knows which half it is.
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -224,6 +225,44 @@ func tagIn(url string) (string, bool) {
 		return "", false
 	}
 	return strings.Trim(url[index+len(tagMarker):], "/"), true
+}
+
+// scriptName is the installer a release publishes at its own tag.
+const scriptName = "install.sh"
+
+// Script fetches the installer a release publishes at its own tag.
+//
+// The release's own script is run rather than a copy carried in this binary, so
+// there is one implementation of the download, attestation, and checksum rules
+// and a fix to it reaches users on their next update. What that costs is a
+// network round trip before the update can begin, which is why the caller checks
+// the tools the script needs first.
+//
+// The body is refused when it is empty or only whitespace. An empty script is the
+// one failure that would otherwise be invisible: sh runs it, it does nothing, and
+// it exits 0, so a release reported as installed would not have been.
+func (c Checker) Script(ctx context.Context, tag string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.rawURL+tag+"/"+scriptName, nil)
+	if err != nil {
+		return nil, errors.New("build installer request")
+	}
+	request.Header.Set("User-Agent", version.UserAgent)
+	response, err := c.follow.Do(request)
+	if err != nil {
+		return nil, errors.New("installer download failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("installer download returned HTTP %s", response.Status)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, errors.New("installer download failed")
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, errors.New("installer download returned an empty script")
+	}
+	return body, nil
 }
 
 // releaseTag reads the tag out of the URL /releases/latest redirects to,

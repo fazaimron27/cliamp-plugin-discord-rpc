@@ -251,3 +251,104 @@ func TestReleaseTagsReturnsNothingUsableAsAnEmptyList(t *testing.T) {
 		t.Fatalf("Tags = %v, want none", tags)
 	}
 }
+
+// serveScript stands up a server answering one body at every path, and returns a
+// Checker whose raw host is it.
+func serveScript(t *testing.T, status int, body string) release.Checker {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(server.Close)
+	return release.New(release.WithRawURL(server.URL))
+}
+
+// The script is fetched at the tag rather than embedded, so a fix to install.sh
+// reaches users on their next update and there is no second copy of the
+// verification rules to keep in step with the original.
+func TestReleaseScriptFetchesTheInstallerAtTheTag(t *testing.T) {
+	script := "#!/bin/sh\necho installed\n"
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		fmt.Fprint(w, script)
+	}))
+	defer server.Close()
+
+	body, err := release.New(release.WithRawURL(server.URL)).Script(context.Background(), "v1.12.0")
+	if err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	if string(body) != script {
+		t.Errorf("Script = %q, want %q", body, script)
+	}
+	if path != "/v1.12.0/install.sh" {
+		t.Errorf("request path = %q, want %q", path, "/v1.12.0/install.sh")
+	}
+}
+
+// A raw host that answers with the file's real location rather than the file is
+// the case the no-follow client would turn into an empty script: sh would run it,
+// it would do nothing, and it would exit 0 — an update reported as successful that
+// changed nothing.
+func TestReleaseScriptFollowsARedirect(t *testing.T) {
+	script := "#!/bin/sh\necho installed\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.12.0/install.sh" {
+			http.Redirect(w, r, "/elsewhere/install.sh", http.StatusFound)
+			return
+		}
+		fmt.Fprint(w, script)
+	}))
+	defer server.Close()
+
+	body, err := release.New(release.WithRawURL(server.URL)).Script(context.Background(), "v1.12.0")
+	if err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	if string(body) != script {
+		t.Errorf("Script = %q, want the redirect's target", body)
+	}
+}
+
+// An empty or whitespace-only script is the worst possible success, so it is
+// refused rather than written out and handed to sh.
+func TestReleaseScriptRefusesAnEmptyInstaller(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"a missing script", http.StatusNotFound, ""},
+		{"an empty body", http.StatusOK, ""},
+		{"a body that is only whitespace", http.StatusOK, "\n  \n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := serveScript(t, test.status, test.body).Script(context.Background(), "v1.12.0")
+			if err == nil {
+				t.Fatalf("Script = %q, want an error", body)
+			}
+		})
+	}
+}
+
+// A raw host given with a trailing slash and one given without must produce one
+// URL, not one with a doubled separator that 404s.
+func TestReleaseScriptAcceptsEitherSpellingOfTheRawHost(t *testing.T) {
+	script := "#!/bin/sh\n"
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		fmt.Fprint(w, script)
+	}))
+	defer server.Close()
+
+	if _, err := release.New(release.WithRawURL(server.URL+"/")).Script(context.Background(), "v1.12.0"); err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	if path != "/v1.12.0/install.sh" {
+		t.Errorf("request path = %q, want %q", path, "/v1.12.0/install.sh")
+	}
+}
