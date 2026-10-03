@@ -215,9 +215,10 @@ cliamp-plugin-discord-rpc/
 - `daemon/internal/discord` implements socket discovery, framing, handshake,
   and `SET_ACTIVITY` over Discord IPC.
 - `daemon/internal/daemon` coordinates subscriptions, artwork, timelines,
-  reconnects, refreshes, and activity clearing. It also owns the `--check`
-  diagnostic, which probes the same transports in isolation and reports them
-  without starting the run loop.
+  reconnects, refreshes, activity clearing, and the check for a newer release,
+  which runs beside the loop rather than in it so a slow GitHub cannot delay a
+  presence update. It also owns the `--check` diagnostic, which probes the same
+  transports in isolation and reports them without starting the run loop.
 - `daemon/internal/style` holds this repository's comment convention, the one
   written for contributors in `docs/comments.md`. It has no API on purpose: a
   convention belongs to no single package, so this one exists to give the guard

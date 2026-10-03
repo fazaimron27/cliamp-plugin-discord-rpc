@@ -24,6 +24,7 @@ import (
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/discord"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/playback"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/statewatch"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
@@ -56,11 +57,20 @@ type validator interface {
 // report as a line of its own. The discarding logger it is handed is what
 // replaces the process-wide redirect this once performed, which had to be put
 // back afterwards and would have raced anything else in the process that logs.
+//
+// The release check is the last line and the only probe that leaves this
+// machine. It is bounded by the same ten seconds as the rest, and it can only
+// warn: see checkReport.
 func Check(ctx context.Context, cfg config.Config) int {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
-	return check(ctx, cfg, discord.NewClient(cfg.ApplicationID, diag.Discard()), artwork.NewLastFM(cfg.LastFMAPIKey), os.Stdout)
+	return checkReport(ctx, cfg,
+		discord.NewClient(cfg.ApplicationID, diag.Discard()),
+		artwork.NewLastFM(cfg.LastFMAPIKey),
+		release.New(),
+		os.Stdout,
+	)
 }
 
 // check is the report itself. Its probes run in a deliberate order: the transport
@@ -93,7 +103,7 @@ func Check(ctx context.Context, cfg config.Config) int {
 func check(ctx context.Context, cfg config.Config, client discordClient, resolver validator, out io.Writer) int {
 	code := 0
 	line := func(status, probe, detail string) {
-		fmt.Fprintf(out, "%-9s %-5s %s\n", probe, status, detail)
+		reportLine(out, status, probe, detail)
 	}
 	fail := func(probe, detail string) {
 		line("fail", probe, detail)
@@ -178,6 +188,59 @@ func check(ctx context.Context, cfg config.Config, client discordClient, resolve
 		line("ok", "config", cfg.CliampConfig)
 	}
 
+	return code
+}
+
+// reportLine writes one probe's line: the probe's name, then its status, then
+// whatever the probe has to say. The two widths are what make the report a
+// table, so every writer of a line goes through here rather than restating the
+// format — there are two of them now, and a report whose columns line up in one
+// section and not the other is worse than either.
+func reportLine(out io.Writer, status, probe, detail string) {
+	fmt.Fprintf(out, "%-9s %-5s %s\n", probe, status, detail)
+}
+
+// reportRelease prints whether a newer release exists, and does not touch the
+// exit code.
+//
+// A newer release is not a broken setup and neither is a GitHub that could not
+// be reached, so both warn. The contract this file opens with is that a working
+// configuration is never reported as broken, and a user may be gating a start on
+// this program's exit code.
+//
+// It is called from checkReport rather than from check because it is the one
+// probe that reads nothing out of the environment the daemon runs in — no
+// socket, no config, no Cliamp — and giving it to check would hand every
+// existing caller of check a parameter none of them use.
+//
+// Unlike the journal line, this report does not latch. A diagnostic answers the
+// question it was just asked, and one that stayed silent because it had already
+// said something would be worse than one that said it could not answer.
+func reportRelease(ctx context.Context, check releaseChecker, out io.Writer) {
+	tag, err := check.Latest(ctx)
+	switch {
+	case err != nil:
+		reportLine(out, "warn", "release", fmt.Sprintf("could not check for a newer release: %v", err))
+	case version.Newer(version.Number, tag):
+		reportLine(out, "warn", "release", newerReleaseWarning(tag))
+	default:
+		reportLine(out, "ok", "release", fmt.Sprintf("v%s is the newest release", version.Number))
+	}
+}
+
+// checkReport is the whole report: every probe the environment answers, then the
+// release check, which is answered by GitHub. It returns what check returned and
+// nothing that reportRelease might produce, which is what makes the exit code
+// independent of a newer release by construction rather than by care.
+//
+// It takes the same four injected pieces check does — the Discord client and the
+// artwork resolver are doubles under test, and releases is the release lookup —
+// so a test can drive the whole report without dialling Discord, Last.fm, or
+// GitHub. Check is the production wiring, and it is the only caller that passes
+// real ones.
+func checkReport(ctx context.Context, cfg config.Config, client discordClient, resolver validator, releases releaseChecker, out io.Writer) int {
+	code := check(ctx, cfg, client, resolver, out)
+	reportRelease(ctx, releases, out)
 	return code
 }
 

@@ -7,6 +7,7 @@ package daemon
 // none of this needs a socket, a Cliamp session, or a Discord.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
@@ -235,5 +237,98 @@ func TestNewerReleaseWarningNamesBothHalves(t *testing.T) {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning omits %q:\n%s", want, warning)
 		}
+	}
+}
+
+// The report answers whether a newer release exists, and the three answers are
+// three lines: an up-to-date daemon, one that is behind, and one that could not
+// find out. The last is a warning rather than an "ok", because "I could not
+// tell" is not "there is nothing newer".
+//
+// The patch case is the one that matters most. v1.11.1 against v1.11.0 is
+// exactly the release this feature exists to notice, and the handshake's
+// comparison, which ignores the patch component, calls those two halves equal.
+//
+// The status is read as the line's second field rather than by searching for
+// the word: the failure detail itself reads "release lookup failed", so a
+// substring hunt for "fail" would report the warn case as a hard failure.
+func TestReportReleasePrintsOneLinePerAnswer(t *testing.T) {
+	tests := []struct {
+		name     string
+		check    releaseChecker
+		status   string
+		contains string
+	}{
+		{
+			"a newer patch is reported",
+			&fakeRelease{tag: "v1.11.1"},
+			"warn",
+			"a newer release exists: v1.11.1",
+		},
+		{
+			"a newer minor is reported",
+			&fakeRelease{tag: "v1.12.0"},
+			"warn",
+			"a newer release exists: v1.12.0",
+		},
+		{
+			"this release is reported ok",
+			&fakeRelease{tag: "v" + version.Number},
+			"ok",
+			"v" + version.Number + " is the newest release",
+		},
+		{
+			"a lookup that could not be made warns",
+			&fakeRelease{err: errors.New("release lookup failed")},
+			"warn",
+			"could not check for a newer release: release lookup failed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			reportRelease(context.Background(), test.check, &out)
+
+			report := out.String()
+			if !strings.Contains(report, test.contains) {
+				t.Fatalf("report = %q, want it to contain %q", report, test.contains)
+			}
+			fields := strings.Fields(report)
+			if len(fields) < 3 {
+				t.Fatalf("report = %q, want a probe, a status, and a detail", report)
+			}
+			if fields[0] != "release" || fields[1] != test.status {
+				t.Fatalf("report = %q, want the release probe reported %s", report, test.status)
+			}
+		})
+	}
+}
+
+// The release probe is the one line here that could move --check's exit code,
+// and the contract in check.go says it must not: a newer release is not a broken
+// setup, and a user may be gating a start on this program's exit code. A working
+// environment with an available update must still exit 0.
+//
+// This drives checkReport with the same injected doubles check's own tests use,
+// rather than with Check, which would dial Discord, Last.fm, and GitHub for
+// real. That is the reason checkReport takes them: the claim under test is that
+// the code the release probe returns cannot reach the caller, and it is worth
+// nothing if the test proves it on a path that stops at the first network call.
+func TestCheckExitsZeroWhenANewerReleaseExists(t *testing.T) {
+	socket := serveCheckCliamp(t, version.Number)
+	cfg := config.Config{
+		ApplicationID: config.DefaultApplicationID,
+		CliampSocket:  socket,
+		LastFMAPIKey:  "configured-key",
+	}
+
+	var out bytes.Buffer
+	code := checkReport(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &fakeRelease{tag: "v1.11.1"}, &out)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d with a newer release available, want 0\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "a newer release exists") {
+		t.Fatalf("report omits the newer release:\n%s", out.String())
 	}
 }
