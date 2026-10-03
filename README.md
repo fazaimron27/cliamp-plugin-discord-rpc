@@ -184,14 +184,16 @@ silent. A plugin old enough to omit its version is not warned about at all.
 
 `cliamp-rpcd --update` installs the newest release — the daemon, its unit, and the
 Cliamp plugin — and restarts the service if it was running. It names the release
-it installs before it starts, and it prints the way back when it finishes:
+it installs before it starts:
 
 ```sh
 cliamp-rpcd --update           # the newest release
 cliamp-rpcd --update v1.11.0   # a version you name, including a reinstall
-cliamp-rpcd --rollback         # the release before this one
-cliamp-rpcd --rollback v1.11.0 # a specific release to go back to
 ```
+
+It installs forward only. Nothing keeps the binary being replaced, so a tag older
+than the running release is refused rather than installed, and there is no command
+that goes back: an older release is only reachable from GitHub, by hand.
 
 Run it from your own shell, not from inside the service: the unit runs with
 `ProtectHome=read-only` and cannot write the binary it would be replacing, so an

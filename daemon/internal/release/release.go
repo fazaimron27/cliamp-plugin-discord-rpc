@@ -9,7 +9,6 @@ package release
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -35,11 +34,6 @@ const RawBase = "https://raw.githubusercontent.com/" + Repository + "/"
 // to the release's tag URL rather than with a body, and it excludes drafts and
 // prereleases by GitHub's definition rather than by a filter here.
 const latestPath = "/releases/latest"
-
-// feedPath is GitHub's Atom feed of releases. It is the same information
-// /releases/latest carries, for every release rather than the newest one, and it
-// is not subject to the API's per-IP rate limit.
-const feedPath = "/releases.atom"
 
 // tagMarker is the part of the redirect target that precedes the tag.
 const tagMarker = "/releases/tag/"
@@ -89,10 +83,10 @@ func WithTimeout(timeout time.Duration) Option {
 // New returns a Checker for this project's releases.
 //
 // The two clients differ in one respect, and it is deliberate. The redirect
-// /releases/latest answers with is the answer, so that client stops at it. The
-// feed and a release's files are bodies, where a redirect is a way of naming the
-// real URL rather than a result: a client that stopped there would hand back an
-// empty body, which for a script means running nothing and reporting success.
+// /releases/latest answers with is the answer, so that client stops at it. A
+// release's files are a body, where a redirect is a way of naming the real URL
+// rather than a result: a client that stopped there would hand back an empty
+// body, which for a script means running nothing and reporting success.
 func New(options ...Option) Checker {
 	checker := Checker{baseURL: defaultBaseURL, rawURL: RawBase}
 	checker.client = &http.Client{
@@ -144,89 +138,6 @@ func (c Checker) Latest(ctx context.Context) (string, error) {
 	return tag, nil
 }
 
-// atomFeed is the slice of GitHub's releases.atom this program reads. The tag is
-// not a field of its own there: it is the last segment of each entry's link, which
-// is why the URL is what gets parsed and releaseTag is what reads it.
-type atomFeed struct {
-	Entries []struct {
-		Links []struct {
-			Href string `xml:"href,attr"`
-		} `xml:"link"`
-	} `xml:"entry"`
-}
-
-// Tags returns this project's released tags, in the order the feed lists them,
-// which is newest first.
-//
-// The feed is read rather than the API because the API allows sixty requests per
-// hour per IP, shared with every other user behind the same address, and this is
-// called by a command a user may run twice in a minute. releases.atom is a
-// document encoding/xml reads from the standard library and needs no credential.
-//
-// A tag that cannot be ordered is dropped rather than returned: the only reason
-// this list is read is to choose something to install, and releaseTag already
-// refuses the values a caller must not guess about.
-//
-// A document that is not the feed — one whose entries name no release tag at all
-// — is an error, and so is a feed with no entries. "I could not tell" must not be
-// reported as "there is no older release" — but a feed that parses and holds only
-// unusable entries is an empty list, because that is a real answer with a real
-// wording.
-func (c Checker) Tags(ctx context.Context) ([]string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+feedPath, nil)
-	if err != nil {
-		return nil, errors.New("build release feed request")
-	}
-	request.Header.Set("User-Agent", version.UserAgent)
-	response, err := c.follow.Do(request)
-	if err != nil {
-		return nil, errors.New("release feed lookup failed")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("release feed lookup returned HTTP %s", response.Status)
-	}
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, errors.New("release feed lookup failed")
-	}
-	var feed atomFeed
-	if err := xml.Unmarshal(body, &feed); err != nil {
-		return nil, errors.New("release feed lookup returned a document that is not a feed")
-	}
-	tags := make([]string, 0, len(feed.Entries))
-	named := false
-	for _, entry := range feed.Entries {
-		for _, link := range entry.Links {
-			if _, ok := tagIn(link.Href); !ok {
-				continue
-			}
-			named = true
-			if tag, ok := releaseTag(link.Href); ok {
-				tags = append(tags, tag)
-			}
-			break
-		}
-	}
-	if !named {
-		return nil, errors.New("release feed lookup returned no release tag")
-	}
-	return tags, nil
-}
-
-// tagIn reads the last path segment following tagMarker out of a URL, reporting
-// false when the URL names no release tag at all. It is the weaker half of
-// releaseTag, and exists separately because "this document names releases" and
-// "this tag can be ordered" are different questions: a feed of prereleases answers
-// the first and not the second.
-func tagIn(url string) (string, bool) {
-	index := strings.LastIndex(url, tagMarker)
-	if index < 0 {
-		return "", false
-	}
-	return strings.Trim(url[index+len(tagMarker):], "/"), true
-}
-
 // scriptName is the installer a release publishes at its own tag.
 const scriptName = "install.sh"
 
@@ -276,8 +187,12 @@ func (c Checker) Script(ctx context.Context, tag string) ([]byte, error) {
 // or an interstitial — fails here, which is the whole point: "I could not tell"
 // must not be reported as "there is nothing newer".
 func releaseTag(location string) (string, bool) {
-	tag, ok := tagIn(location)
-	if !ok || !version.IsVersion(tag) {
+	index := strings.LastIndex(location, tagMarker)
+	if index < 0 {
+		return "", false
+	}
+	tag := strings.Trim(location[index+len(tagMarker):], "/")
+	if !version.IsVersion(tag) {
 		return "", false
 	}
 	return tag, true
