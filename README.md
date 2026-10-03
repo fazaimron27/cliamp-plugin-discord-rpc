@@ -159,9 +159,12 @@ is behind and prints the command that updates it, so follow that line. For
 reference:
 
 - **The plugin is behind.** Install it at the daemon's version, which the warning
-  names:
+  names. The installed copy goes first: Cliamp's `plugins install` refuses a
+  plugin that is already there, and a plugin that reported a version is by
+  definition already installed.
 
   ```sh
+  cliamp plugins remove discord-rpc
   cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.11.0
   ```
 
