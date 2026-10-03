@@ -193,13 +193,78 @@ func installRelease(ctx context.Context, target, binDir string, deps upgradeDeps
 	return 0
 }
 
+// pluginName is the plugin's name inside Cliamp, which is what trust takes.
+const pluginName = "discord-rpc"
+
+// serviceName is the systemd user unit a release installs.
+const serviceName = "cliamp-rpcd.service"
+
+// restartWarning is what a restart that could not be run leaves behind.
+const restartWarning = "cliamp-rpcd.service was not restarted: run systemctl --user try-restart cliamp-rpcd.service, or restart your daemon yourself"
+
+// installPlugin updates the plugin half through Cliamp.
+//
+// It is driven rather than described because one command should leave a matched
+// pair, and because the daemon half has already been replaced by the time this
+// runs: leaving the plugin behind would produce exactly the mismatch the version
+// check warns about, from the command that was supposed to prevent it.
+//
+// A missing cliamp is not a failure of this program's own work, but it does leave
+// the pair mismatched, so it is reported with both commands and a false return
+// rather than silently skipped.
+func installPlugin(ctx context.Context, target string, deps upgradeDeps, out io.Writer) bool {
+	if _, err := deps.lookPath("cliamp"); err != nil {
+		fmt.Fprintf(out,
+			"plugin not updated: cliamp is not on PATH. Run: cliamp plugins install %s@%s, then cliamp plugins trust %s\n",
+			release.Repository, tag(target), pluginName)
+		return false
+	}
+	if err := deps.runner.Run(ctx, "", "cliamp", "plugins", "install", release.Repository+"@"+tag(target)); err != nil {
+		fmt.Fprintf(out, "plugin not updated: %v\n", err)
+		return false
+	}
+	if err := deps.runner.Run(ctx, "", "cliamp", "plugins", "trust", pluginName); err != nil {
+		fmt.Fprintf(out, "the plugin was installed but not trusted: %v\nRun: cliamp plugins trust %s\n", err, pluginName)
+		return false
+	}
+	fmt.Fprintf(out, "plugin updated to %s\n", tag(target))
+	return true
+}
+
+// restart restarts a running daemon and says nothing about a stopped one.
+//
+// try-restart rather than restart: install.sh leaves the unit installed,
+// disabled, and stopped, and a restart would start it for a user who deliberately
+// runs the daemon in a terminal — possibly while that daemon is still running and
+// holding the socket. A restart that could not be run is a warning, because
+// try-restart cannot report "nothing was running" as distinct from "restarted",
+// and because a machine without systemd is doing nothing wrong.
+func restart(ctx context.Context, deps upgradeDeps, out io.Writer) {
+	if _, err := deps.lookPath("systemctl"); err != nil {
+		fmt.Fprintf(out, "%s\n", restartWarning)
+		return
+	}
+	if err := deps.runner.Run(ctx, "", "systemctl", "--user", "try-restart", serviceName); err != nil {
+		fmt.Fprintf(out, "%s\n", restartWarning)
+		return
+	}
+	fmt.Fprintf(out, "restarted %s\n", serviceName)
+}
+
 // upgrade is both commands: the tag is chosen differently for each and nothing
 // after it differs.
 //
 // The order is the spec's and it is fixed: validate an explicit tag, preflight the
-// tools, resolve the tag if none was given, install. The first two make no request
-// and the third is the only one that does, so a bad tag or a missing command is
-// answered without touching the network at all.
+// tools, resolve the tag if none was given, install the daemon, install the
+// plugin, restart. The first two make no request and the third is the only one
+// that does, so a bad tag or a missing command is answered without touching the
+// network at all.
+//
+// Every step stops the sequence on failure and nothing after it runs. That is
+// what keeps the pair matched: the daemon binary is already replaced by the time
+// the plugin step runs, so a failed plugin would leave a new daemon to be started
+// against the plugin it no longer matches, which is the state this command
+// exists to avoid.
 func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgradeDeps, out io.Writer) int {
 	target, ok := explicitTag(cfg.ReleaseTag, out)
 	if !ok {
@@ -222,6 +287,14 @@ func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgr
 	if binDir == "" {
 		binDir = filepath.Dir(deps.binary)
 	}
-	fmt.Fprintf(out, "installing %s into %s\n", tag(target), binDir)
-	return installRelease(ctx, target, binDir, deps, out)
+	fmt.Fprintf(out, "installing %s into %s, then restarting %s\n", tag(target), binDir, serviceName)
+	if code := installRelease(ctx, target, binDir, deps, out); code != 0 {
+		return code
+	}
+	if !installPlugin(ctx, target, deps, out) {
+		return 1
+	}
+	restart(ctx, deps, out)
+	fmt.Fprintf(out, "to go back: cliamp-rpcd --rollback\n")
+	return 0
 }
