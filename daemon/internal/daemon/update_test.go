@@ -4,6 +4,10 @@ package daemon
 // the commands it would run, the PATH they would be found on, and the release it
 // would fetch. The exact argv and the exact order are the feature, so they are
 // what is asserted.
+//
+// For the plugin step, IsTrusted() is injected via deps (see newHarness) so
+// tests can set whether to expect a trust prompt. The default in tests is
+// true to avoid interactive prompts during CI, matching the Linux behavior.
 
 import (
 	"bytes"
@@ -156,17 +160,19 @@ type harness struct {
 }
 
 // newHarness returns a harness whose release host and PATH are entirely under the
-// test's control.
+// test's control. It sets isTrusted to true (matching Linux) so the install
+// succeeds without a trust prompt.
 func newHarness() *harness {
 	h := &harness{
 		run: &recorder{failWith: errors.New("exit status 1")},
 		src: &fakeSource{script: []byte("#!/bin/sh\n")},
 	}
 	h.deps = upgradeDeps{
-		runner:   h.run,
-		lookPath: lookPathWithout(),
-		releases: h.src,
-		binary:   "/home/user/.local/bin/cliamp-rpcd",
+		runner:    h.run,
+		lookPath:  lookPathWithout(),
+		releases:  h.src,
+		binary:    "/home/user/.local/bin/cliamp-rpcd",
+		isTrusted: func() bool { return true },
 	}
 	return h
 }
@@ -592,6 +598,24 @@ func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
 		if !strings.Contains(h.out.String(), line) {
 			t.Fatalf("output omits %q:\n%s", line, h.out.String())
 		}
+	}
+}
+
+// On non-Linux (or any platform where IsTrusted returns false), the install
+// needs --yes for unattended updates.
+func TestUpdateInstallsThePluginWithYesFlagWhenNotTrusted(t *testing.T) {
+	h := newHarness()
+	h.deps.isTrusted = func() bool { return false }
+	h.src.latest = "v1.12.0"
+
+	code := h.upgrade(modeUpdate, config.Config{})
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
+	}
+	want := "cliamp plugins install " + release.Repository + "@v1.12.0 --yes"
+	if got := h.run.commands()[2]; got != want {
+		t.Fatalf("command 3 = %q, want %q", got, want)
 	}
 }
 
