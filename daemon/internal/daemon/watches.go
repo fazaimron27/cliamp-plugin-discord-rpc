@@ -10,12 +10,8 @@ package daemon
 import (
 	"fmt"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
-)
-
-const (
-	repository = "fazaimron27/cliamp-plugin-discord-rpc"
-	rawBase    = "https://raw.githubusercontent.com/" + repository + "/"
 )
 
 // normalize trims a plugin-reported version and drops any leading "v". The value
@@ -95,6 +91,10 @@ type versionWatch struct {
 // the half that is behind is the point of that remedy: this daemon is usually a
 // source build running ahead of the installed plugin, so a warning that always
 // pointed at the plugin would have that user downgrade the half that is current.
+//
+// The removal in that remedy is not decoration. A plugin that reported a version
+// is already installed, and Cliamp's install refuses a plugin that is already
+// there, so the install alone could only ever fail.
 func (w *versionWatch) observe(pluginVersion string) string {
 	reported := normalize(pluginVersion)
 	if reported == "" || !w.first(reported) {
@@ -105,13 +105,13 @@ func (w *versionWatch) observe(pluginVersion string) string {
 	switch relation {
 	case version.PluginBehind:
 		return fmt.Sprintf(
-			"discord-rpc %s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install %s@v%s",
-			explained, repository, version.Number,
+			"discord-rpc %s; these release lines use incompatible transports. Install matching halves with: cliamp plugins remove %s, then cliamp plugins install %s@v%s",
+			explained, pluginName, release.Repository, version.Number,
 		)
 	case version.DaemonBehind:
 		return fmt.Sprintf(
 			"discord-rpc %s. Update cliamp-rpcd with: curl -fsSL %s%s/install.sh | sh (or rebuild from source), then restart it.",
-			explained, rawBase, tag(reported),
+			explained, release.RawBase, tag(reported),
 		)
 	default:
 		return ""

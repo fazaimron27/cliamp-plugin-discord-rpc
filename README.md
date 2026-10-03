@@ -150,8 +150,8 @@ for Cliamp state in <path>`: the daemon is reading the document rather than
 subscribing to it.
 
 Run `~/.local/bin/cliamp-rpcd --help` for all daemon options, `--version` to
-print the release and exit, or `--check` to probe the environment before
-starting.
+print the release and exit, `--check` to probe the environment before starting,
+or `--update` to install a newer release.
 
 If the daemon logs a warning that the plugin and daemon versions do not match,
 the two halves came from different release lines. The warning names the half that
@@ -159,9 +159,12 @@ is behind and prints the command that updates it, so follow that line. For
 reference:
 
 - **The plugin is behind.** Install it at the daemon's version, which the warning
-  names:
+  names. The installed copy goes first: Cliamp's `plugins install` refuses a
+  plugin that is already there, and a plugin that reported a version is by
+  definition already installed.
 
   ```sh
+  cliamp plugins remove discord-rpc
   cliamp plugins install fazaimron27/cliamp-plugin-discord-rpc@v1.11.0
   ```
 
@@ -177,13 +180,36 @@ reference:
 Only the major and minor components are compared, so a patch difference stays
 silent. A plugin old enough to omit its version is not warned about at all.
 
+### Update an installed copy
+
+`cliamp-rpcd --update` installs the newest release — the daemon, its unit, and the
+Cliamp plugin — and restarts the service if it was running. It names the release
+it installs before it starts, and it prints the way back when it finishes:
+
+```sh
+cliamp-rpcd --update           # the newest release
+cliamp-rpcd --update v1.11.0   # a version you name, including a reinstall
+cliamp-rpcd --rollback         # the release before this one
+cliamp-rpcd --rollback v1.11.0 # a specific release to go back to
+```
+
+Run it from your own shell, not from inside the service: the unit runs with
+`ProtectHome=read-only` and cannot write the binary it would be replacing, so an
+update started from there fails. That refusal is the hardening working.
+
+The command installs the release's own published installer, so what it downloads
+is verified against the workflow attestation and the published checksum exactly
+as a manual install is. If `cliamp` is not on `PATH` it installs the daemon half,
+prints the two plugin commands for you to run, and exits non-zero — the two
+halves would otherwise be left on different release lines.
+
 Separately from that comparison, the daemon asks GitHub once a day whether a newer
 release of this project exists, and logs a line the first time it sees one. That
 line compares all three components, so a patch release is reported there even
-though the mismatch warning stays quiet about it, and it names the commands that
-update both halves. A machine that is offline logs the failed check once and then
-stays quiet until it can reach GitHub again. `--check` reports the same answer as
-its last line, and never fails because of it.
+though the mismatch warning stays quiet about it, and it names the way to act on
+it: `cliamp-rpcd --update`. A machine that is offline logs the failed check once
+and then stays quiet until it can reach GitHub again. `--check` reports the same
+answer as its last line, and never fails because of it.
 
 ### Optional systemd user service
 
