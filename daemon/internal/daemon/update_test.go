@@ -9,6 +9,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -641,5 +645,75 @@ func TestPreviousTag(t *testing.T) {
 				t.Fatalf("previousTag(%v, %q) = %q, %v; want %q, %v", test.tags, test.current, got, found, test.want, test.found)
 			}
 		})
+	}
+}
+
+// The stub installer writes down where it was run from, what it was called as,
+// and what it was passed. It is the evidence the assertions below read.
+const stubInstaller = `#!/bin/sh
+{
+  pwd
+  printf '%s\n' "$0"
+  printf '%s\n' "$*"
+  ls -A
+} > "$EVIDENCE"
+`
+
+// The one claim a fake runner cannot make: that the fetched installer runs, in a
+// directory holding the script and nothing else. install.sh installs what sits
+// beside it without verifying anything, so the second half of that is the whole
+// design — and it depends on the script's own path as well as the child's working
+// directory, which is why both are asserted.
+//
+// cliamp and systemctl are deliberately absent from PATH: neither half of the
+// rest of the sequence should run a real command from a test.
+func TestUpdateRunsTheInstallerAloneInItsOwnDirectory(t *testing.T) {
+	evidence := filepath.Join(t.TempDir(), "evidence")
+	t.Setenv("EVIDENCE", evidence)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, stubInstaller)
+	}))
+	defer server.Close()
+
+	h := newHarness()
+	h.deps.releases = release.New(release.WithRawURL(server.URL))
+	h.deps.runner = execRunner{out: &h.out}
+	h.deps.lookPath = lookPathWithout("cliamp", "systemctl")
+
+	h.upgrade(modeUpdate, config.Config{ReleaseTag: "v1.12.0"})
+
+	body, err := os.ReadFile(evidence)
+	if err != nil {
+		t.Fatalf("the installer did not run: %v\n%s", err, h.out.String())
+	}
+	lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("the installer recorded %q, want a directory, a path, arguments, and a listing", lines)
+	}
+	directory, calledAs, arguments := lines[0], lines[1], lines[2]
+	if filepath.Dir(calledAs) != directory {
+		t.Fatalf("the installer was run as %q from %q, want the script inside the directory it ran in", calledAs, directory)
+	}
+	if arguments != "--version v1.12.0 --bin-dir /home/user/.local/bin" {
+		t.Fatalf("arguments = %q", arguments)
+	}
+	if listing := strings.Join(lines[3:], "\n"); listing != "install.sh" {
+		t.Fatalf("the installer's directory holds %q, want the script alone", listing)
+	}
+	if strings.HasPrefix(directory, "/home/user") {
+		t.Fatalf("the installer ran in %q, want a temporary directory", directory)
+	}
+}
+
+// A child must die with the context rather than outliving the terminal that
+// started it, which is what Ctrl-C during an update is.
+func TestExecRunnerRefusesACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := execRunner{out: io.Discard}.Run(ctx, "", "sh", "-c", "true")
+	if err == nil {
+		t.Fatal("a cancelled context started a child process")
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
@@ -297,4 +298,72 @@ func upgrade(ctx context.Context, cfg config.Config, mode upgradeMode, deps upgr
 	restart(ctx, deps, out)
 	fmt.Fprintf(out, "to go back: cliamp-rpcd --rollback\n")
 	return 0
+}
+
+// execRunner runs a child with its output on the same terminal the report uses,
+// and its input inherited so a prompt behaves as it would by hand.
+//
+// An empty dir leaves the child in this process's working directory, which is
+// what the plugin and restart steps want: they are the user's own commands and
+// should see the user's own directory.
+type execRunner struct {
+	out io.Writer
+}
+
+// Run runs one command, returning its failure as the error.
+func (r execRunner) Run(ctx context.Context, dir, name string, args ...string) error {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Dir = dir
+	command.Stdout = r.out
+	command.Stderr = r.out
+	command.Stdin = os.Stdin
+	return command.Run()
+}
+
+// executablePath is the running binary's own path, which is where a release
+// install replaces it.
+//
+// os.Executable cannot fail on the platforms this ships to, so the fallback is
+// for a case that should not arise rather than one that does: a path from
+// os.Args[0] is still better than refusing to update.
+func executablePath() string {
+	path, err := os.Executable()
+	if err != nil {
+		return os.Args[0]
+	}
+	return path
+}
+
+// newUpgradeDeps is the production wiring, shared by both commands so they cannot
+// reach outside themselves differently.
+func newUpgradeDeps(out io.Writer) upgradeDeps {
+	return upgradeDeps{
+		runner:   execRunner{out: out},
+		lookPath: exec.LookPath,
+		releases: release.New(),
+		binary:   executablePath(),
+		binDir:   os.Getenv("CLIAMP_RPC_BIN_DIR"),
+	}
+}
+
+// Update installs the newest release, or the tag the user named, and returns the
+// process exit code: 0 when both halves were installed, non-zero when either was
+// not.
+//
+// It runs the same way whatever started it. Started by hand it replaces the
+// binary under $HOME; started by the unit it fails, because ProtectHome=read-only
+// is what makes the daemon unable to write the files it reads, and that is a
+// property worth keeping.
+func Update(ctx context.Context, cfg config.Config) int {
+	return upgrade(ctx, cfg, modeUpdate, newUpgradeDeps(os.Stdout), os.Stdout)
+}
+
+// Rollback installs the newest release strictly older than this daemon, or the
+// tag the user named, and returns the process exit code.
+//
+// It steps down one release per run rather than toggling: the release to go back
+// to is derived from GitHub's list each time, so nothing about the previous
+// version is stored on this machine and uninstall.sh has nothing new to clean up.
+func Rollback(ctx context.Context, cfg config.Config) int {
+	return upgrade(ctx, cfg, modeRollback, newUpgradeDeps(os.Stdout), os.Stdout)
 }
