@@ -50,12 +50,11 @@ type runner interface {
 // upgradeDeps is everything the sequence reaches outside itself for, so a test
 // can supply all of it.
 type upgradeDeps struct {
-	runner    runner
-	lookPath  func(string) (string, error)
-	releases  releaseSource
-	binary    string
-	binDir    string
-	isTrusted func() bool
+	runner   runner
+	lookPath func(string) (string, error)
+	releases releaseSource
+	binary   string
+	binDir   string
 }
 
 // upgradeTools are the commands a release install needs: the seven install.sh
@@ -220,10 +219,14 @@ const restartWarning = "cliamp-rpcd.service was not restarted: run systemctl --u
 // then, so that command is a plain re-run rather than one that has to clear the
 // way first.
 //
-// The trust step is conditional. Install records the trust itself, but it
-// requires the user to approve the hash and permissions, so on Linux where
-// install.sh delivers the tarball directly (and thus the user has already
-// approved on first install), IsTrusted() returns true and no prompt is needed.
+// The trust is approved with --yes rather than asked for. Install records the
+// trust itself, but without --yes it reads the approval from its own stdin and
+// fails outright when there is none to read — so a run started from a script, a
+// timer, or anywhere else without a terminal would stop at the plugin half with
+// the daemon half already replaced. Update is a command the user chose to run, on
+// this project's own release, so the approval is taken as given rather than put
+// to a user who has already asked for the install.
+//
 // A missing cliamp is not a failure of this program's own work, but it does leave
 // the pair mismatched, so it is reported with both commands and a false return
 // rather than silently skipped.
@@ -235,11 +238,7 @@ func installPlugin(ctx context.Context, target string, deps upgradeDeps, out io.
 		return false
 	}
 	_ = deps.runner.Run(ctx, "", "cliamp", "plugins", "remove", pluginName)
-	args := []string{"plugins", "install", release.Repository + "@" + tag(target)}
-	if deps.isTrusted() {
-		args = append(args, "--yes")
-	}
-	if err := deps.runner.Run(ctx, "", "cliamp", args...); err != nil {
+	if err := deps.runner.Run(ctx, "", "cliamp", "plugins", "install", release.Repository+"@"+tag(target), "--yes"); err != nil {
 		fmt.Fprintf(out, "plugin not updated: %v\nRun: cliamp plugins install %s@%s\n", err, release.Repository, tag(target))
 		return false
 	}
@@ -361,12 +360,11 @@ func executablePath() string {
 // reach outside themselves differently.
 func newUpgradeDeps(out io.Writer) upgradeDeps {
 	return upgradeDeps{
-		runner:    execRunner{out: out},
-		lookPath:  exec.LookPath,
-		releases:  release.New(),
-		binary:    executablePath(),
-		binDir:    os.Getenv("CLIAMP_RPC_BIN_DIR"),
-		isTrusted: IsTrusted,
+		runner:   execRunner{out: out},
+		lookPath: exec.LookPath,
+		releases: release.New(),
+		binary:   executablePath(),
+		binDir:   os.Getenv("CLIAMP_RPC_BIN_DIR"),
 	}
 }
 
