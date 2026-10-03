@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -91,6 +92,6 @@ func watchReleases(ctx context.Context, check releaseChecker, interval time.Dura
 func newerReleaseWarning(tag string) string {
 	return fmt.Sprintf(
 		"a newer release exists: %s, and this daemon is v%s. Update both halves with: cliamp plugins install %s@%s, then curl -fsSL %s%s/install.sh | sh; restart the daemon afterwards.",
-		tag, version.Number, repository, tag, rawBase, tag,
+		tag, version.Number, release.Repository, tag, release.RawBase, tag,
 	)
 }

@@ -10,12 +10,8 @@ package daemon
 import (
 	"fmt"
 
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
-)
-
-const (
-	repository = "fazaimron27/cliamp-plugin-discord-rpc"
-	rawBase    = "https://raw.githubusercontent.com/" + repository + "/"
 )
 
 // normalize trims a plugin-reported version and drops any leading "v". The value
@@ -106,12 +102,12 @@ func (w *versionWatch) observe(pluginVersion string) string {
 	case version.PluginBehind:
 		return fmt.Sprintf(
 			"discord-rpc %s; these release lines use incompatible transports. Install matching halves with: cliamp plugins install %s@v%s",
-			explained, repository, version.Number,
+			explained, release.Repository, version.Number,
 		)
 	case version.DaemonBehind:
 		return fmt.Sprintf(
 			"discord-rpc %s. Update cliamp-rpcd with: curl -fsSL %s%s/install.sh | sh (or rebuild from source), then restart it.",
-			explained, rawBase, tag(reported),
+			explained, release.RawBase, tag(reported),
 		)
 	default:
 		return ""

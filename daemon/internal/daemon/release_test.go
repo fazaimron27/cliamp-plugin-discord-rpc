@@ -17,6 +17,7 @@ import (
 
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/config"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/diag"
+	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/release"
 	"github.com/fazaimron27/cliamp-plugin-discord-rpc/daemon/internal/version"
 )
 
@@ -231,8 +232,8 @@ func TestNewerReleaseWarningNamesBothHalves(t *testing.T) {
 	for _, want := range []string{
 		"v1.12.0",
 		"v" + version.Number,
-		"cliamp plugins install " + repository + "@v1.12.0",
-		rawBase + "v1.12.0/install.sh",
+		"cliamp plugins install " + release.Repository + "@v1.12.0",
+		release.RawBase + "v1.12.0/install.sh",
 	} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning omits %q:\n%s", want, warning)
