@@ -15,7 +15,7 @@ import (
 // Number is the released version of this project. The Lua plugin manifest and
 // the release tag must carry the same value; install.sh is bundled into release
 // archives and pins the same line, so bump all of them together.
-const Number = "1.12.0"
+const Number = "1.12.1"
 
 // UserAgent is the client string every HTTP request from this program carries.
 // It names the binary and the release it is, so a server operator reading a log
