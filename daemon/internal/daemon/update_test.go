@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -191,8 +192,9 @@ func lineFor(output, first string) (string, bool) {
 // outcome, then what it did. Nothing else — a run of this command has to be
 // readable enough to be read.
 func TestUpdateReportsEachStepOnOneLine(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 
 	if code := h.upgrade(config.Config{}); code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -201,8 +203,8 @@ func TestUpdateReportsEachStepOnOneLine(t *testing.T) {
 		step   string
 		detail string
 	}{
-		{"daemon", "v" + version.Number + " -> v1.12.0, attestation and checksum verified"},
-		{"plugin", "installed v1.12.0"},
+		{"daemon", "v" + version.Number + " -> " + newRelease + ", attestation and checksum verified"},
+		{"plugin", "installed " + newRelease},
 		{"service", "restarted cliamp-rpcd.service"},
 	} {
 		line, ok := lineFor(h.out.String(), want.step)
@@ -215,16 +217,6 @@ func TestUpdateReportsEachStepOnOneLine(t *testing.T) {
 	}
 }
 
-// cliampInstallOutput is what the real `cliamp plugins install` prints, taken
-// from pluginmgr's own format strings.
-const cliampInstallOutput = `Trying https://github.com/fazaimron27/cliamp-plugin-discord-rpc...
-Source: https://github.com/fazaimron27/cliamp-plugin-discord-rpc@v1.12.0
-SHA-256: 9944bf32a0d5f1c0f2a13c3f0f4a2a2a1f0e9d8c7b6a59483726150413243546
-Declared permissions: none
-Implicit access: unrestricted reads; allowlisted writes; public HTTP
-Installed discord-rpc → /home/user/.config/cliamp/plugins/discord-rpc
-`
-
 // The install carries --yes, so the approval is taken as given and the trust
 // Cliamp recorded is the only record of what was approved. It is kept rather than
 // dropped, one fact per line, under the step that recorded it.
@@ -232,9 +224,17 @@ Installed discord-rpc → /home/user/.config/cliamp/plugins/discord-rpc
 // Each fact is indented to the column where the step's own detail begins, which is
 // read off the step's line rather than restated here so that the two cannot drift.
 func TestUpdateKeepsTheTrustCliampRecorded(t *testing.T) {
+	newRelease := "v" + newerLine(t)
+	installOutput := fmt.Sprintf(`Trying https://github.com/fazaimron27/cliamp-plugin-discord-rpc...
+Source: https://github.com/fazaimron27/cliamp-plugin-discord-rpc@%s
+SHA-256: 9944bf32a0d5f1c0f2a13c3f0f4a2a2a1f0e9d8c7b6a59483726150413243546
+Declared permissions: none
+Implicit access: unrestricted reads; allowlisted writes; public HTTP
+Installed discord-rpc → /home/user/.config/cliamp/plugins/discord-rpc
+`, newRelease)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
-	h.run.output = []byte(cliampInstallOutput)
+	h.src.latest = newRelease
+	h.run.output = []byte(installOutput)
 
 	if code := h.upgrade(config.Config{}); code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
@@ -243,7 +243,7 @@ func TestUpdateKeepsTheTrustCliampRecorded(t *testing.T) {
 	if !ok {
 		t.Fatalf("the report has no plugin line:\n%s", h.out.String())
 	}
-	column := strings.Index(step, "installed v1.12.0")
+	column := strings.Index(step, "installed "+newRelease)
 	if column < 0 {
 		t.Fatalf("the plugin line does not report the install: %q", step)
 	}
@@ -251,7 +251,7 @@ func TestUpdateKeepsTheTrustCliampRecorded(t *testing.T) {
 		fact  string
 		value string
 	}{
-		{"source", "https://github.com/fazaimron27/cliamp-plugin-discord-rpc@v1.12.0"},
+		{"source", "https://github.com/fazaimron27/cliamp-plugin-discord-rpc@" + newRelease},
 		{"sha256", "9944bf32a0d5f1c0f2a13c3f0f4a2a2a1f0e9d8c7b6a59483726150413243546"},
 		{"permissions", "none"},
 		{"access", "unrestricted reads; allowlisted writes; public HTTP"},
@@ -273,7 +273,7 @@ func TestUpdateKeepsTheTrustCliampRecorded(t *testing.T) {
 // quiet success possible; it must not make a failure quiet as well.
 func TestUpdateReplaysTheOutputOfAFailedCommand(t *testing.T) {
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = "v" + newerLine(t)
 	h.run.output = []byte("curl: (7) Failed to connect to github.com port 443\n")
 	h.run.failAt = 1
 
@@ -294,7 +294,7 @@ func TestUpdateReplaysTheOutputOfAFailedCommand(t *testing.T) {
 // next line glued to the end of the command's last one.
 func TestUpdateKeepsAReplayedFailureOnItsOwnLine(t *testing.T) {
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = "v" + newerLine(t)
 	h.run.output = []byte("  % Total    % Received % Xferd")
 	h.run.failAt = 1
 
@@ -311,7 +311,7 @@ func TestUpdateKeepsAReplayedFailureOnItsOwnLine(t *testing.T) {
 // first-time install are noise around an answer that is one line.
 func TestUpdateDropsTheOutputOfASuccessfulCommand(t *testing.T) {
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = "v" + newerLine(t)
 	h.run.output = []byte("  % Total    % Received % Xferd  Average Speed   Time\n100   5568  100   5568    0     0  12687      0\n")
 
 	if code := h.upgrade(config.Config{}); code != 0 {
@@ -327,26 +327,27 @@ func TestUpdateDropsTheOutputOfASuccessfulCommand(t *testing.T) {
 // whole design: install.sh installs what sits beside it without verifying
 // anything, so the script must be run where nothing sits beside it.
 func TestUpdateInstallsTheDaemonHalf(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
 	h.deps.binDir = "/home/user/.local/bin"
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 
 	code := h.upgrade(config.Config{})
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
 	}
-	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin"
+	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version " + newRelease + " --bin-dir /home/user/.local/bin"
 	if got := h.run.commands(); got[0] != want {
 		t.Fatalf("commands = %v, want the installer first: %s", got, want)
 	}
 	if h.run.dirs()[0] == "" {
 		t.Fatal("the installer ran with no working directory, so it could have found a binary beside it")
 	}
-	if !strings.Contains(h.out.String(), "installing v1.12.0 into /home/user/.local/bin") {
+	if !strings.Contains(h.out.String(), "installing "+newRelease+" into /home/user/.local/bin") {
 		t.Fatalf("output does not name the directory it is installing into:\n%s", h.out.String())
 	}
-	if !strings.Contains(h.out.String(), "v"+version.Number+" -> v1.12.0, attestation and checksum verified") {
+	if !strings.Contains(h.out.String(), "v"+version.Number+" -> "+newRelease+", attestation and checksum verified") {
 		t.Fatalf("output omits the update:\n%s", h.out.String())
 	}
 }
@@ -355,12 +356,13 @@ func TestUpdateInstallsTheDaemonHalf(t *testing.T) {
 // somewhere else has that copy replaced rather than a second one installed into
 // the documented location.
 func TestUpdateInstallsIntoTheRunningBinarysDirectory(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 
 	h.upgrade(config.Config{})
 
-	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin"
+	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version " + newRelease + " --bin-dir /home/user/.local/bin"
 	if got := h.run.commands(); got[0] != want {
 		t.Fatalf("commands = %v, want %s", got, want)
 	}
@@ -369,13 +371,14 @@ func TestUpdateInstallsIntoTheRunningBinarysDirectory(t *testing.T) {
 // The environment variable wins over the running binary's directory, matching
 // install.sh's own precedence.
 func TestUpdateHonorsTheBinDirOverride(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
 	h.setBinDir("/opt/cliamp/bin")
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 
 	h.upgrade(config.Config{})
 
-	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /opt/cliamp/bin"
+	want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version " + newRelease + " --bin-dir /opt/cliamp/bin"
 	if got := h.run.commands(); got[0] != want {
 		t.Fatalf("commands = %v, want %s", got, want)
 	}
@@ -429,7 +432,9 @@ func TestUpdateDoesNothingWhenTheNewestReleaseIsOlderThanThisOne(t *testing.T) {
 // request — version.Normalize drops the "v" and install.sh is handed the "v" back,
 // because it refuses a version without one.
 func TestUpdateObeysAnExplicitTagWithoutAsking(t *testing.T) {
-	for _, given := range []string{"v1.12.0", "1.12.0", " v1.12.0 "} {
+	newRelease := "v" + newerLine(t)
+	newReleaseBare := newerLine(t)
+	for _, given := range []string{newRelease, newReleaseBare, " " + newRelease + " "} {
 		t.Run(given, func(t *testing.T) {
 			h := newHarness()
 			h.src.latest = "v9.9.9"
@@ -442,7 +447,7 @@ func TestUpdateObeysAnExplicitTagWithoutAsking(t *testing.T) {
 			if len(h.src.lookups()) != 0 {
 				t.Fatalf("the release host was asked %v, want no lookup", h.src.lookups())
 			}
-			want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin"
+			want := "sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version " + newRelease + " --bin-dir /home/user/.local/bin"
 			if got := h.run.commands(); got[0] != want {
 				t.Fatalf("commands = %v, want %s", got, want)
 			}
@@ -546,12 +551,13 @@ func TestUpdateRefusesBeforeAskingWhenAToolIsMissing(t *testing.T) {
 // requests reached by different paths, so they are two cases: the first never gets
 // a tag to install, and the second fails after the tag is known.
 func TestUpdateStopsWhenTheReleaseCannotBeFetched(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	tests := []struct {
 		name string
 		cfg  config.Config
 	}{
 		{"the newest release cannot be looked up", config.Config{}},
-		{"the installer cannot be fetched", config.Config{ReleaseTag: "v1.12.0"}},
+		{"the installer cannot be fetched", config.Config{ReleaseTag: newRelease}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -575,7 +581,7 @@ func TestUpdateStopsWhenTheReleaseCannotBeFetched(t *testing.T) {
 // also what a read-only $HOME produces when --update is run from inside the unit.
 func TestUpdateStopsWhenTheInstallerFails(t *testing.T) {
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = "v" + newerLine(t)
 	h.run.failAt = 1
 
 	code := h.upgrade(config.Config{})
@@ -600,8 +606,9 @@ func TestUpdateStopsWhenTheInstallerFails(t *testing.T) {
 // cliamp's install refuses a plugin that is already there, and records the trust
 // itself once the user approves its prompt.
 func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 
 	code := h.upgrade(config.Config{})
 
@@ -609,9 +616,9 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
 	}
 	want := []string{
-		"sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version v1.12.0 --bin-dir /home/user/.local/bin",
+		"sh " + filepath.Join(h.run.dirs()[0], "install.sh") + " --version " + newRelease + " --bin-dir /home/user/.local/bin",
 		"cliamp plugins remove discord-rpc",
-		"cliamp plugins install " + release.Repository + "@v1.12.0 --yes",
+		"cliamp plugins install " + release.Repository + "@" + newRelease + " --yes",
 		"systemctl --user try-restart cliamp-rpcd.service",
 	}
 	got := h.run.commands()
@@ -624,8 +631,8 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 		}
 	}
 	for _, line := range []string{
-		"v" + version.Number + " -> v1.12.0, attestation and checksum verified",
-		"installed v1.12.0",
+		"v" + version.Number + " -> " + newRelease + ", attestation and checksum verified",
+		"installed " + newRelease,
 		"restarted cliamp-rpcd.service",
 	} {
 		if !strings.Contains(h.out.String(), line) {
@@ -639,7 +646,7 @@ func TestUpdateDrivesThePluginHalfAndTheRestart(t *testing.T) {
 // terminal — possibly while that foreground daemon holds the socket.
 func TestUpdateUsesTryRestart(t *testing.T) {
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = "v" + newerLine(t)
 
 	h.upgrade(config.Config{})
 
@@ -654,8 +661,9 @@ func TestUpdateUsesTryRestart(t *testing.T) {
 // stops before the restart rather than bringing the new daemon up against the
 // plugin it no longer matches.
 func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 	h.deps.lookPath = lookPathWithout("cliamp")
 
 	code := h.upgrade(config.Config{})
@@ -668,7 +676,7 @@ func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
 	}
 	for _, want := range []string{
 		"cliamp plugins remove discord-rpc",
-		"cliamp plugins install " + release.Repository + "@v1.12.0",
+		"cliamp plugins install " + release.Repository + "@" + newRelease,
 	} {
 		if !strings.Contains(h.out.String(), want) {
 			t.Fatalf("output omits %q:\n%s", want, h.out.String())
@@ -684,6 +692,7 @@ func TestUpdateReportsAMissingCliampAndFails(t *testing.T) {
 // all is doing nothing wrong, so the two halves that were installed stay a
 // success.
 func TestUpdateWarnsButSucceedsWhenTheRestartCannotRun(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	tests := []struct {
 		name     string
 		lookPath func(string) (string, error)
@@ -695,7 +704,7 @@ func TestUpdateWarnsButSucceedsWhenTheRestartCannotRun(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness()
-			h.src.latest = "v1.12.0"
+			h.src.latest = newRelease
 			h.deps.lookPath = test.lookPath
 			h.run.failAt = test.failAt
 
@@ -715,19 +724,20 @@ func TestUpdateWarnsButSucceedsWhenTheRestartCannotRun(t *testing.T) {
 // untouched, so a half-updated machine is never left mid-sequence by this
 // program.
 func TestUpdateStopsAtTheFirstFailedStep(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	tests := []struct {
 		name    string
 		failAt  int
 		want    int
 		omitted string
 	}{
-		{"the installer", 1, 1, "installed v1.12.0"},
+		{"the installer", 1, 1, "installed " + newRelease},
 		{"the plugin install", 3, 1, "restarted cliamp-rpcd.service"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness()
-			h.src.latest = "v1.12.0"
+			h.src.latest = newRelease
 			h.run.failAt = test.failAt
 
 			code := h.upgrade(config.Config{})
@@ -749,13 +759,14 @@ func TestUpdateStopsAtTheFirstFailedStep(t *testing.T) {
 // hand. That command needs no removal of its own: the old copy was taken away
 // before the install was attempted.
 func TestUpdateNamesTheInstallCommandWhenThePluginInstallFails(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 	h.run.failAt = 3
 
 	h.upgrade(config.Config{})
 
-	want := "Run: cliamp plugins install " + release.Repository + "@v1.12.0"
+	want := "Run: cliamp plugins install " + release.Repository + "@" + newRelease
 	if !strings.Contains(h.out.String(), want) {
 		t.Fatalf("output omits %q:\n%s", want, h.out.String())
 	}
@@ -765,8 +776,9 @@ func TestUpdateNamesTheInstallCommandWhenThePluginInstallFails(t *testing.T) {
 // succeed, and on a machine with no plugin the removal fails for the ordinary
 // reason that there is nothing to remove — which is not a failure of the update.
 func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 	h.run.failAt = 2
 
 	code := h.upgrade(config.Config{})
@@ -777,7 +789,7 @@ func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
 	if h.run.count() != 4 {
 		t.Fatalf("commands = %v, want all four", h.run.commands())
 	}
-	for _, line := range []string{"installed v1.12.0", "restarted cliamp-rpcd.service"} {
+	for _, line := range []string{"installed " + newRelease, "restarted cliamp-rpcd.service"} {
 		if !strings.Contains(h.out.String(), line) {
 			t.Fatalf("output omits %q:\n%s", line, h.out.String())
 		}
@@ -788,15 +800,16 @@ func TestUpdateInstallsThePluginEvenWhenTheRemovalFails(t *testing.T) {
 // rather than asked of them, so an unattended update never blocks on a prompt —
 // and there is one behavior to get right instead of one per operating system.
 func TestUpdateAlwaysApprovesThePluginTrust(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	h := newHarness()
-	h.src.latest = "v1.12.0"
+	h.src.latest = newRelease
 
 	code := h.upgrade(config.Config{})
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0:\n%s", code, h.out.String())
 	}
-	want := "cliamp plugins install " + release.Repository + "@v1.12.0 --yes"
+	want := "cliamp plugins install " + release.Repository + "@" + newRelease + " --yes"
 	if got := h.run.commands()[2]; got != want {
 		t.Fatalf("command 3 = %q, want %q", got, want)
 	}
@@ -822,6 +835,7 @@ const stubInstaller = `#!/bin/sh
 // cliamp and systemctl are deliberately absent from PATH: neither half of the
 // rest of the sequence should run a real command from a test.
 func TestUpdateRunsTheInstallerAloneInItsOwnDirectory(t *testing.T) {
+	newRelease := "v" + newerLine(t)
 	evidence := filepath.Join(t.TempDir(), "evidence")
 	t.Setenv("EVIDENCE", evidence)
 
@@ -835,7 +849,7 @@ func TestUpdateRunsTheInstallerAloneInItsOwnDirectory(t *testing.T) {
 	h.deps.runner = execRunner{}
 	h.deps.lookPath = lookPathWithout("cliamp", "systemctl")
 
-	h.upgrade(config.Config{ReleaseTag: "v1.12.0"})
+	h.upgrade(config.Config{ReleaseTag: newRelease})
 
 	body, err := os.ReadFile(evidence)
 	if err != nil {
@@ -849,7 +863,7 @@ func TestUpdateRunsTheInstallerAloneInItsOwnDirectory(t *testing.T) {
 	if filepath.Dir(calledAs) != directory {
 		t.Fatalf("the installer was run as %q from %q, want the script inside the directory it ran in", calledAs, directory)
 	}
-	if arguments != "--version v1.12.0 --bin-dir /home/user/.local/bin" {
+	if arguments != "--version "+newRelease+" --bin-dir /home/user/.local/bin" {
 		t.Fatalf("arguments = %q", arguments)
 	}
 	if listing := strings.Join(lines[3:], "\n"); listing != "install.sh" {

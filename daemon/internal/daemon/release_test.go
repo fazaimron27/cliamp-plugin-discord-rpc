@@ -121,7 +121,7 @@ func startWatcherWith(t *testing.T, check releaseChecker, logger diag.Logger) fu
 // line per check would be thirty lines about one release.
 func TestWatchReleasesReportsANewerReleaseOnceAtStartup(t *testing.T) {
 	logs, logger := captureLog()
-	check := &fakeRelease{tag: "v1.12.0"}
+	check := &fakeRelease{tag: "v" + newerLine(t)}
 
 	stop := startWatcherWith(t, check, logger)
 	waitFor(t, "the newer release to be reported", func() bool {
@@ -228,10 +228,11 @@ func TestWatchReleasesReturnsWhenTheContextIsCancelled(t *testing.T) {
 // when reading it: the sentence is printed by the running daemon, and a daemon
 // old enough to print the old sentence is a daemon with no --update to name.
 func TestNewerReleaseWarningNamesTheUpdateCommand(t *testing.T) {
-	warning := newerReleaseWarning("v1.12.0")
+	newRelease := "v" + newerLine(t)
+	warning := newerReleaseWarning(newRelease)
 
 	for _, want := range []string{
-		"v1.12.0",
+		newRelease,
 		"v" + version.Number,
 		"cliamp-rpcd --update",
 	} {
@@ -251,14 +252,23 @@ func TestNewerReleaseWarningNamesTheUpdateCommand(t *testing.T) {
 // find out. The last is a warning rather than an "ok", because "I could not
 // tell" is not "there is nothing newer".
 //
-// The patch case is the one that matters most. v1.11.1 against v1.11.0 is
-// exactly the release this feature exists to notice, and the handshake's
-// comparison, which ignores the patch component, calls those two halves equal.
+// The patch case is the one that matters most: one patch ahead of the running
+// release is exactly the release this feature exists to notice, and the
+// handshake's comparison, which ignores the patch component, calls those two
+// halves equal. The derived patch is asserted to be genuinely newer, so a
+// release whose patch component is already non-zero cannot leave this case
+// quietly asserting an older one.
 //
 // The status is read as the line's second field rather than by searching for
 // the word: the failure detail itself reads "release lookup failed", so a
 // substring hunt for "fail" would report the warn case as a hard failure.
 func TestReportReleasePrintsOneLinePerAnswer(t *testing.T) {
+	newRelease := "v" + newerLine(t)
+	fields := strings.Split(version.Number, ".")
+	patchAhead := "v" + fields[0] + "." + fields[1] + ".1"
+	if !version.Newer(version.Number, patchAhead) {
+		t.Fatalf("version.Newer(%q, %q) = false, want true", version.Number, patchAhead)
+	}
 	tests := []struct {
 		name     string
 		check    releaseChecker
@@ -267,15 +277,15 @@ func TestReportReleasePrintsOneLinePerAnswer(t *testing.T) {
 	}{
 		{
 			"a newer patch is reported",
-			&fakeRelease{tag: "v1.11.1"},
+			&fakeRelease{tag: patchAhead},
 			"warn",
-			"a newer release exists: v1.11.1",
+			"a newer release exists: " + patchAhead,
 		},
 		{
 			"a newer minor is reported",
-			&fakeRelease{tag: "v1.12.0"},
+			&fakeRelease{tag: newRelease},
 			"warn",
-			"a newer release exists: v1.12.0",
+			"a newer release exists: " + newRelease,
 		},
 		{
 			"this release is reported ok",
@@ -329,7 +339,8 @@ func TestCheckExitsZeroWhenANewerReleaseExists(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	code := checkReport(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &fakeRelease{tag: "v1.11.1"}, &out)
+	newRelease := "v" + newerLine(t)
+	code := checkReport(context.Background(), cfg, newFakeDiscord(), fakeValidator{}, &fakeRelease{tag: newRelease}, &out)
 
 	if code != 0 {
 		t.Fatalf("exit code = %d with a newer release available, want 0\n%s", code, out.String())
