@@ -59,6 +59,56 @@ func TestConfigUsesDedicatedPluginSection(t *testing.T) {
 	}
 }
 
+// TOML allows a comment wherever whitespace is, a section header included, so
+// the line is a header and everything after its closing bracket is a comment.
+// Requiring the line to end in ] instead skipped the header, and the section
+// stayed whatever it was before: the keys below it were attributed to the
+// section above, and the header's own keys were never seen at all.
+func TestConfigReadsSectionHeaderWithTrailingComment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
+	t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "")
+	path := filepath.Join(home, "config.toml")
+	data := "[plugins.discord-rpc] # the Discord bridge\napp_id = \"123\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load([]string{"--config", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ApplicationID != "123" {
+		t.Errorf("application ID = %q, want %q", cfg.ApplicationID, "123")
+	}
+}
+
+// A commented section header still closes the section above it, so a like-named
+// key in the section below is not read as if it belonged to the wanted one.
+// Without that, a [spotify] header carrying a comment left the Discord section
+// in force over Spotify's keys, and Spotify's own application ID was handed to
+// the Discord handshake in place of the built-in default.
+func TestConfigSectionHeaderCommentEndsTheSectionAbove(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLIAMP_DISCORD_APP_ID", "")
+	t.Setenv("CLIAMP_DISCORD_LASTFM_API_KEY", "")
+	path := filepath.Join(home, "config.toml")
+	data := "[plugins.discord-rpc]\nlastfm_api_key = \"discord-key\"\n\n[spotify] # my Spotify\napp_id = \"spotifys-own-id\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load([]string{"--config", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ApplicationID != config.DefaultApplicationID {
+		t.Errorf("application ID = %q, want the built-in default", cfg.ApplicationID)
+	}
+}
+
 // A quoted value followed by an inline comment used to keep its quote
 // characters, because the quoted branch required a quote as the final character
 // of the whole value and anything trailing it fell through to the unquoted path.

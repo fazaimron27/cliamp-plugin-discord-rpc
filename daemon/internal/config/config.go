@@ -278,8 +278,8 @@ func readTOMLValue(path, wantedSection, wantedKey string) (string, error) {
 	section := ""
 	for _, rawLine := range strings.Split(string(data), "\n") {
 		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.TrimSpace(line[1 : len(line)-1])
+		if name, ok := tomlSection(line); ok {
+			section = name
 			continue
 		}
 		if section != wantedSection || strings.HasPrefix(line, "#") {
@@ -305,9 +305,10 @@ func readTOMLValue(path, wantedSection, wantedKey string) (string, error) {
 	return "", nil
 }
 
-// trimTOMLComment removes a trailing comment from a TOML value. TOML permits a #
-// inside both basic and literal strings, so a quoted value is scanned to its
-// closing quote and only an unquoted value is split at the first #.
+// trimTOMLComment removes a trailing comment from a TOML value, or from a
+// section header. TOML permits a # inside both basic and literal strings, so a
+// quoted value is scanned to its closing quote and only an unquoted value is
+// split at the first #.
 //
 // Stripping the comment before testing for quotes is what the caller depends on:
 // requiring a quote as the final character meant `app_id = "1" # note` fell
@@ -338,4 +339,28 @@ func trimTOMLComment(value string) string {
 		}
 	}
 	return value
+}
+
+// tomlSection returns the section a line names, and whether the line names one
+// at all. TOML allows a comment wherever whitespace is, a header included, so a
+// trailing comment is removed before the closing bracket is looked for.
+// Requiring the bracket to be the line's last character left the header
+// unrecognised, and the section before it stayed in force: the header's own
+// keys were skipped, and a like-named key in the section below was read as
+// belonging to the section above.
+//
+// A line already ending in a bracket is left alone, since that bracket may be
+// part of a quoted name and only the comment is this function's to remove.
+func tomlSection(line string) (string, bool) {
+	if !strings.HasPrefix(line, "[") {
+		return "", false
+	}
+	header := line
+	if !strings.HasSuffix(header, "]") {
+		header = trimTOMLComment(header)
+	}
+	if !strings.HasSuffix(header, "]") {
+		return "", false
+	}
+	return strings.TrimSpace(header[1 : len(header)-1]), true
 }
