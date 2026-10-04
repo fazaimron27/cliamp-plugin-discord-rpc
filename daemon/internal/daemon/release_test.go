@@ -255,20 +255,16 @@ func TestNewerReleaseWarningNamesTheUpdateCommand(t *testing.T) {
 // The patch case is the one that matters most: one patch ahead of the running
 // release is exactly the release this feature exists to notice, and the
 // handshake's comparison, which ignores the patch component, calls those two
-// halves equal. The derived patch is asserted to be genuinely newer, so a
+// halves equal. That patch line is derived from the running release's own, so a
 // release whose patch component is already non-zero cannot leave this case
-// quietly asserting an older one.
+// quietly asserting an equal or older one.
 //
 // The status is read as the line's second field rather than by searching for
 // the word: the failure detail itself reads "release lookup failed", so a
 // substring hunt for "fail" would report the warn case as a hard failure.
 func TestReportReleasePrintsOneLinePerAnswer(t *testing.T) {
 	newRelease := "v" + newerLine(t)
-	fields := strings.Split(version.Number, ".")
-	patchAhead := "v" + fields[0] + "." + fields[1] + ".1"
-	if !version.Newer(version.Number, patchAhead) {
-		t.Fatalf("version.Newer(%q, %q) = false, want true", version.Number, patchAhead)
-	}
+	patchAhead := patchAheadLine(t)
 	tests := []struct {
 		name     string
 		check    releaseChecker

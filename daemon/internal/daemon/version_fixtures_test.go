@@ -5,10 +5,10 @@ package daemon
 // shiftLine, the arithmetic under them, pinned at the major boundary where that
 // arithmetic is easiest to get wrong.
 //
-// The fixtures live here rather than beside one of their users, because two
-// test files need a plugin version at a known distance from the daemon's own:
-// the run loop's version watch in daemon_test.go and the --check diagnostic in
-// check_test.go.
+// The fixtures live here rather than beside one of their users, because more
+// than one test file needs a release version at a known distance from the
+// daemon's own: the run loop's version watch in daemon_test.go, the --check
+// diagnostic in check_test.go, and the release report in release_test.go.
 
 import (
 	"fmt"
@@ -30,6 +30,28 @@ func newerLine(t *testing.T) string {
 func olderLine(t *testing.T) string {
 	t.Helper()
 	return mustShiftLine(t, version.Number, -1)
+}
+
+// patchAheadLine derives the patch release one step above the daemon's own, as
+// a v-prefixed tag: the nearest release the diagnostic exists to notice, and
+// the one a minor step cannot express.
+//
+// The patch component is read from the daemon's own release rather than written
+// out, because a hardcoded one collapses to that release the first time the
+// release is itself a patch. The bump to v1.12.1 is what found this: the
+// fixture still rendered v1.12.1, so the case asserting a newer patch was
+// asserting an equal release instead, and only the assertion it carried said so.
+func patchAheadLine(t *testing.T) string {
+	t.Helper()
+	fields := strings.SplitN(version.Number, ".", 3)
+	if len(fields) != 3 {
+		t.Fatalf("release %q is not major.minor.patch", version.Number)
+	}
+	patch, err := strconv.Atoi(fields[2])
+	if err != nil {
+		t.Fatalf("release %q has a non-numeric patch: %v", version.Number, err)
+	}
+	return fmt.Sprintf("v%s.%s.%d", fields[0], fields[1], patch+1)
 }
 
 func mustShiftLine(t *testing.T, value string, delta int) string {
